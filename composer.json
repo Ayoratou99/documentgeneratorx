@@ -55,6 +55,6 @@
         "test": "vendor/bin/phpunit",
         "format": "vendor/bin/pint"
     },
-    "minimum-stability": "dev",
+    "minimum-stability": "stable",
     "prefer-stable": true
 }
