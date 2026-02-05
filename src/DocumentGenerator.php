@@ -25,10 +25,19 @@ class DocumentGenerator
     protected ?GeneratorInterface $generator = null;
     protected TemplateLoader $templateLoader;
     protected bool $isTemporaryTemplate = false;
+    protected ?string $lastGeneratedPath = null;
+    protected bool $tempOutput;
+    protected bool $cleanupOnShutdown;
+    protected bool $deleteAfterDownload;
 
     public function __construct()
     {
         $this->templateLoader = new TemplateLoader();
+        
+        // Load config options
+        $this->tempOutput = config('documentgenerator.temp_output', true);
+        $this->cleanupOnShutdown = config('documentgenerator.cleanup_on_shutdown', true);
+        $this->deleteAfterDownload = config('documentgenerator.delete_after_download', true);
     }
 
     /**
@@ -85,6 +94,24 @@ class DocumentGenerator
     }
 
     /**
+     * Set whether output should be temporary (overrides config)
+     */
+    public function temporary(bool $temp = true): self
+    {
+        $this->tempOutput = $temp;
+        return $this;
+    }
+
+    /**
+     * Set output as permanent (not temporary)
+     */
+    public function permanent(): self
+    {
+        $this->tempOutput = false;
+        return $this;
+    }
+
+    /**
      * Generate the PDF document and return file path
      */
     public function generate(string $outputPath = null): string
@@ -119,22 +146,37 @@ class DocumentGenerator
             $outputPath
         );
         
+        // Track the generated file
+        $this->lastGeneratedPath = $outputPath;
+        
+        // Register for cleanup if temp output is enabled
+        if ($this->tempOutput && $this->cleanupOnShutdown) {
+            $this->registerForCleanup($outputPath);
+        }
+        
         // Clean up temporary template if needed
-        $this->cleanupTemporaryFiles();
+        $this->cleanupTemporaryTemplate();
 
         return $outputPath;
     }
 
     /**
-     * Generate and save to storage
+     * Generate and save to storage (permanent, not affected by temp_output)
      */
     public function generateToStorage(string $path, string $disk = 'local'): string
     {
+        // Force temp output for intermediate file
+        $originalTempOutput = $this->tempOutput;
+        $this->tempOutput = true;
+        
         $tempPath = $this->generate();
+        
+        // Restore original setting
+        $this->tempOutput = $originalTempOutput;
         
         Storage::disk($disk)->put($path, file_get_contents($tempPath));
         
-        // Clean up temp file
+        // Clean up temp file immediately
         @unlink($tempPath);
         
         return Storage::disk($disk)->path($path);
@@ -156,7 +198,9 @@ class DocumentGenerator
             $filename .= '.pdf';
         }
 
-        return response()->download($filePath, $filename)->deleteFileAfterSend(true);
+        // Delete after download if configured
+        return response()->download($filePath, $filename)
+            ->deleteFileAfterSend($this->deleteAfterDownload);
     }
 
     /**
@@ -172,20 +216,44 @@ class DocumentGenerator
     }
 
     /**
-     * Generate output file path (always PDF)
+     * Generate output file path
      */
     protected function generateOutputPath(): string
     {
-        $tempDir = sys_get_temp_dir();
+        if ($this->tempOutput) {
+            // Use system temp directory for temporary files
+            $dir = sys_get_temp_dir();
+        } else {
+            // Use configured output path for permanent files
+            $dir = config('documentgenerator.output_path', storage_path('app/generated-documents'));
+            
+            // Ensure directory exists
+            if (!is_dir($dir)) {
+                mkdir($dir, 0755, true);
+            }
+        }
+        
         $filename = 'document_' . uniqid() . '.pdf';
         
-        return $tempDir . DIRECTORY_SEPARATOR . $filename;
+        return $dir . DIRECTORY_SEPARATOR . $filename;
     }
 
     /**
-     * Clean up temporary files
+     * Register a file for cleanup on script shutdown
      */
-    protected function cleanupTemporaryFiles(): void
+    protected function registerForCleanup(string $path): void
+    {
+        register_shutdown_function(function () use ($path) {
+            if (file_exists($path)) {
+                @unlink($path);
+            }
+        });
+    }
+
+    /**
+     * Clean up temporary template files
+     */
+    protected function cleanupTemporaryTemplate(): void
     {
         if ($this->isTemporaryTemplate && $this->templatePath) {
             register_shutdown_function(function () {
@@ -194,6 +262,26 @@ class DocumentGenerator
                 }
             });
         }
+    }
+
+    /**
+     * Manually delete the last generated file
+     */
+    public function cleanup(): self
+    {
+        if ($this->lastGeneratedPath && file_exists($this->lastGeneratedPath)) {
+            @unlink($this->lastGeneratedPath);
+            $this->lastGeneratedPath = null;
+        }
+        return $this;
+    }
+
+    /**
+     * Get the path of the last generated file
+     */
+    public function getLastGeneratedPath(): ?string
+    {
+        return $this->lastGeneratedPath;
     }
 
     /**
@@ -213,12 +301,21 @@ class DocumentGenerator
     }
 
     /**
+     * Check if output is set to temporary
+     */
+    public function isTemporary(): bool
+    {
+        return $this->tempOutput;
+    }
+
+    /**
      * Reset the generator state
      */
     public function reset(): self
     {
         // Clean up before reset
-        $this->cleanupTemporaryFiles();
+        $this->cleanup();
+        $this->cleanupTemporaryTemplate();
         
         $this->variables = [];
         $this->templatePath = null;
@@ -226,6 +323,10 @@ class DocumentGenerator
         $this->templateFormat = null;
         $this->generator = null;
         $this->isTemporaryTemplate = false;
+        $this->lastGeneratedPath = null;
+        
+        // Reload config
+        $this->tempOutput = config('documentgenerator.temp_output', true);
         
         return $this;
     }

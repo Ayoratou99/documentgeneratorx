@@ -169,9 +169,83 @@ Get detected template format.
 
 ---
 
+#### `temporary(bool $temp = true): self`
+
+Set output as temporary (auto-deleted on script end).
+
+**Parameters:**
+- `$temp` (bool) - Whether output should be temporary (default: true)
+
+**Returns:** `self` for method chaining
+
+**Example:**
+```php
+// Force temporary output (overrides config)
+DocumentGenerator::template('template.docx')
+    ->variables(['name' => 'John'])
+    ->temporary()
+    ->generate();
+```
+
+---
+
+#### `permanent(): self`
+
+Set output as permanent (not auto-deleted).
+
+**Returns:** `self` for method chaining
+
+**Example:**
+```php
+// Keep the generated file permanently
+DocumentGenerator::template('template.docx')
+    ->variables(['name' => 'John'])
+    ->permanent()
+    ->generate('/path/to/keep/document.pdf');
+```
+
+---
+
+#### `cleanup(): self`
+
+Manually delete the last generated file.
+
+**Returns:** `self` for method chaining
+
+**Example:**
+```php
+$generator = DocumentGenerator::template('template.docx')
+    ->variables(['name' => 'John']);
+
+$path = $generator->generate();
+
+// Do something with the file...
+
+// Then manually delete it
+$generator->cleanup();
+```
+
+---
+
+#### `getLastGeneratedPath(): ?string`
+
+Get the path of the last generated file.
+
+**Returns:** `string|null` - Path to last generated file
+
+---
+
+#### `isTemporary(): bool`
+
+Check if output is set to temporary mode.
+
+**Returns:** `bool` - True if temporary output is enabled
+
+---
+
 #### `reset(): self`
 
-Reset generator state.
+Reset generator state and cleanup files.
 
 **Returns:** `self` for method chaining
 
@@ -329,24 +403,56 @@ return [
     // Default template storage path
     'template_path' => storage_path('app/document-templates'),
     
-    // Default output path
+    // Default output path (used when temp_output is false)
     'output_path' => storage_path('app/generated-documents'),
     
-    // Storage disk
-    'disk' => 'local',
+    // Save to temp directory and auto-delete (prevents storage filling up)
+    'temp_output' => true,
     
-    // Auto-delete temporary files
-    'auto_delete' => true,
+    // Delete file after download() is called
+    'delete_after_download' => true,
+    
+    // Cleanup temp files when script ends
+    'cleanup_on_shutdown' => true,
+    
+    // Storage disk for generateToStorage()
+    'disk' => 'local',
 ];
 ```
 
-### Environment Variables
+### Configuration Options
 
-```env
-DOCUMENT_TEMPLATE_PATH=/path/to/templates
-DOCUMENT_OUTPUT_PATH=/path/to/outputs
-DOCUMENT_STORAGE_DISK=local
-DOCUMENT_AUTO_DELETE=true
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `template_path` | string | `storage_path('app/document-templates')` | Where templates are stored |
+| `output_path` | string | `storage_path('app/generated-documents')` | Where permanent files are saved |
+| `temp_output` | bool | `true` | Use temp directory for generated files |
+| `delete_after_download` | bool | `true` | Auto-delete after download() |
+| `cleanup_on_shutdown` | bool | `true` | Cleanup when script ends |
+| `disk` | string | `'local'` | Laravel storage disk |
+
+### Temporary Output Behavior
+
+When `temp_output` is `true` (default):
+- Files are saved to system temp directory (`sys_get_temp_dir()`)
+- Files are automatically deleted when the PHP script ends
+- Prevents storage from filling up with generated documents
+
+When `temp_output` is `false`:
+- Files are saved to `output_path`
+- Files are kept permanently until manually deleted
+
+**Override in code:**
+```php
+// Force temporary for this call
+DocumentGenerator::template('template.docx')
+    ->temporary()
+    ->generate();
+
+// Force permanent for this call
+DocumentGenerator::template('template.docx')
+    ->permanent()
+    ->generate('/keep/this/file.pdf');
 ```
 
 ---

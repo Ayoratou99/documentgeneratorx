@@ -17,38 +17,54 @@ return [
     |--------------------------------------------------------------------------
     |
     | The default path where generated documents are saved.
+    | If 'temp_output' is true, this will be ignored and system temp dir is used.
     |
     */
     'output_path' => storage_path('app/generated-documents'),
 
     /*
     |--------------------------------------------------------------------------
-    | Default Format
+    | Temporary Output
     |--------------------------------------------------------------------------
     |
-    | The default output format for generated documents.
-    | Supported: "docx", "pdf"
+    | When true, generated PDF files are saved to the system temp directory
+    | and automatically deleted after download or when the script ends.
+    | This prevents storage from filling up with generated files.
+    |
+    | Set to false if you need to keep generated files permanently.
     |
     */
-    'default_format' => 'docx',
+    'temp_output' => true,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Auto Delete After Download
+    |--------------------------------------------------------------------------
+    |
+    | When true, generated files are automatically deleted after being
+    | downloaded. Only applies when using the download() method.
+    |
+    */
+    'delete_after_download' => true,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Auto Cleanup on Script End
+    |--------------------------------------------------------------------------
+    |
+    | When true, temporary output files are registered for deletion when
+    | the PHP script ends. This ensures cleanup even if download fails.
+    |
+    */
+    'cleanup_on_shutdown' => true,
 
     /*
     |--------------------------------------------------------------------------
     | Storage Disk
     |--------------------------------------------------------------------------
     |
-    | The default Laravel storage disk to use.
+    | The default Laravel storage disk to use for generateToStorage().
     |
     */
     'disk' => 'local',
-
-    /*
-    |--------------------------------------------------------------------------
-    | Auto Delete
-    |--------------------------------------------------------------------------
-    |
-    | Whether to automatically delete temporary files after generation.
-    |
-    */
-    'auto_delete' => true,
 ];

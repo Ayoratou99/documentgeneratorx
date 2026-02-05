@@ -195,11 +195,52 @@ Config options in `config/documentgenerator.php`:
 
 ```php
 return [
+    // Where templates are stored
     'template_path' => storage_path('app/document-templates'),
+    
+    // Where permanent files are saved (when temp_output is false)
     'output_path' => storage_path('app/generated-documents'),
+    
+    // Save to temp directory and auto-delete (prevents storage filling up)
+    'temp_output' => true,
+    
+    // Delete file after download() is called
+    'delete_after_download' => true,
+    
+    // Cleanup temp files when script ends
+    'cleanup_on_shutdown' => true,
+    
+    // Storage disk for generateToStorage()
     'disk' => 'local',
-    'auto_delete' => true,
 ];
+```
+
+### Temporary vs Permanent Output
+
+By default, generated PDFs are **temporary** - saved to system temp directory and auto-deleted when the script ends. This prevents your storage from filling up.
+
+```php
+// Temporary (default) - auto-deleted after script ends
+$path = DocumentGenerator::template('template.docx')
+    ->variables(['name' => 'John'])
+    ->generate();
+
+// Force permanent output for this generation
+$path = DocumentGenerator::template('template.docx')
+    ->variables(['name' => 'John'])
+    ->permanent()
+    ->generate('/path/to/keep/document.pdf');
+
+// Force temporary output (overrides config)
+$path = DocumentGenerator::template('template.docx')
+    ->variables(['name' => 'John'])
+    ->temporary()
+    ->generate();
+
+// generateToStorage() always saves permanently
+$path = DocumentGenerator::template('template.docx')
+    ->variables(['name' => 'John'])
+    ->generateToStorage('documents/output.pdf', 'public');
 ```
 
 ## Requirements

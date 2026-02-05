@@ -1,1 +1,26 @@
 /vendor/
+composer.phar
+.phpunit.result.cache
+
+# Generated test files
+output_*.pdf
+output_*.docx
+
+# Test templates (user-created)
+template.docx
+template.pdf
+template.html
+*.svg.png
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary Word files
+~$*.docx
