@@ -1,6 +1,6 @@
 {
     "name": "ayoratoumvone/documentgeneratorx",
-    "description": "A package to generate documents (DOCX/PDF) based on templates with advanced variable types including images",
+    "description": "A package to generate documents (DOCX/PDF) based on templates with advanced variable types including images.",
     "type": "library",
     "license": "MIT",
     "keywords": [
