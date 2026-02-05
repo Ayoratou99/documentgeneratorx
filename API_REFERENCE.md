@@ -295,6 +295,8 @@ $generator->generate('template.html', $variables, 'output.pdf');
 
 **Syntax:** `{{variable:text}}`
 
+**With Styles:** `{{variable:text,font-size:14,bold:true,color:red}}`
+
 **Valid Values:**
 - String
 - Number (converted to string)
@@ -303,6 +305,78 @@ $generator->generate('template.html', $variables, 'output.pdf');
 ```php
 ['name' => 'John Doe']
 ['description' => 'Lorem ipsum dolor sit amet']
+```
+
+---
+
+## Styling Variables
+
+Add inline styles to any text, number, or date variable.
+
+### Syntax
+
+```
+{{variable:type,style1:value1,style2:value2}}
+```
+
+### Examples
+
+```
+{{title:text,font-size:24,bold:true,color:#2c3e50}}
+{{price:number,color:green,font-weight:bold}}
+{{warning:text,color:red,underline:true}}
+{{header:text,font-size:18,italic:true,background-color:#f0f0f0}}
+```
+
+### Supported Style Properties
+
+| Property | Values | Example |
+|----------|--------|---------|
+| `font-size` | Number (with or without `pt`) | `font-size:14`, `font-size:18pt` |
+| `font-weight` | `bold`, `normal` | `font-weight:bold` |
+| `font-style` | `italic`, `normal` | `font-style:italic` |
+| `font-family` | Font name | `font-family:Arial` |
+| `color` | Hex or named color | `color:#FF0000`, `color:red` |
+| `background-color` | Hex or named color | `background-color:#FFFF00` |
+| `text-decoration` | `underline`, `line-through`, `none` | `text-decoration:underline` |
+
+### Shortcut Properties
+
+| Shortcut | Equivalent |
+|----------|------------|
+| `bold:true` | `font-weight:bold` |
+| `italic:true` | `font-style:italic` |
+| `underline:true` | `text-decoration:underline` |
+
+### Named Colors
+
+Supported named colors: `red`, `green`, `blue`, `black`, `white`, `yellow`, `orange`, `purple`, `pink`, `gray`, `grey`, `brown`, `navy`, `teal`, `maroon`
+
+### Template Example
+
+**DOCX Template:**
+```
+Invoice #{{invoice_number:text,font-weight:bold}}
+
+Customer: {{customer_name:text,font-size:14,color:#333}}
+
+Total: ${{total:number,font-size:18,bold:true,color:green}}
+
+{{note:text,italic:true,color:gray}}
+```
+
+**PHP Code:**
+```php
+$variables = [
+    'invoice_number' => 'INV-2024-001',
+    'customer_name' => 'John Doe',
+    'total' => 1250.00,
+    'note' => 'Thank you for your business!',
+];
+
+DocumentGenerator::template('invoice.docx')
+    ->variables($variables)
+    ->generate('invoice.pdf');
 ```
 
 ---

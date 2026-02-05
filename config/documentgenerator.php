@@ -3,6 +3,43 @@
 return [
     /*
     |--------------------------------------------------------------------------
+    | PDF Conversion Method
+    |--------------------------------------------------------------------------
+    |
+    | Method to convert DOCX to PDF:
+    | - 'libreoffice': (default) Uses LibreOffice for best quality PDF output.
+    |                  Preserves all formatting, styles, and layout from the
+    |                  original DOCX document. Requires LibreOffice installation.
+    | - 'dompdf': Uses HTML-based conversion. No external dependencies required,
+    |             but may not preserve all formatting from the original document.
+    |             Use this if LibreOffice is not available on your system.
+    |
+    | If LibreOffice is not installed and method is 'libreoffice', an exception
+    | will be thrown with instructions to either install LibreOffice or switch
+    | to 'dompdf' mode.
+    |
+    | LibreOffice download: https://www.libreoffice.org/download/download/
+    |
+    */
+    'pdf_conversion' => env('DOCUMENT_PDF_CONVERSION', 'libreoffice'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | LibreOffice Path
+    |--------------------------------------------------------------------------
+    |
+    | Path to the LibreOffice executable. Leave null for auto-detection.
+    | 
+    | Common paths:
+    | - Windows: C:\Program Files\LibreOffice\program\soffice.exe
+    | - Linux: /usr/bin/libreoffice or /usr/bin/soffice
+    | - macOS: /Applications/LibreOffice.app/Contents/MacOS/soffice
+    |
+    */
+    'libreoffice_path' => env('LIBREOFFICE_PATH', null),
+
+    /*
+    |--------------------------------------------------------------------------
     | Template Path
     |--------------------------------------------------------------------------
     |

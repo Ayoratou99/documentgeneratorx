@@ -7,12 +7,30 @@ use Ayoratoumvone\Documentgeneratorx\Exceptions\DocumentGeneratorException;
 class VariableParser
 {
     /**
+     * Supported style properties
+     */
+    protected array $styleProperties = [
+        'font-size',
+        'font-weight',
+        'font-style',
+        'font-family',
+        'color',
+        'background-color',
+        'text-decoration',
+        'text-align',
+        'underline',
+        'bold',
+        'italic',
+    ];
+
+    /**
      * Parse variable syntax: {{varname:type,options}}
      * Examples:
      * - {{name:text}}
      * - {{age:number}}
      * - {{logo:image,width:200,height:100}}
      * - {{photo:image,ratio:16:9}}
+     * - {{title:text,font-size:18,bold:true,color:#333}}
      */
     public function parse(string $template): array
     {
@@ -42,12 +60,21 @@ class VariableParser
         $type = isset($nameParts[1]) ? trim($nameParts[1]) : 'text';
         
         $options = [];
+        $styles = [];
         
         // Parse remaining options
         for ($i = 1; $i < count($parts); $i++) {
             if (strpos($parts[$i], ':') !== false) {
                 [$key, $value] = explode(':', $parts[$i], 2);
-                $options[trim($key)] = trim($value);
+                $key = trim($key);
+                $value = trim($value);
+                
+                // Check if it's a style property
+                if ($this->isStyleProperty($key)) {
+                    $styles[$key] = $this->normalizeStyleValue($key, $value);
+                } else {
+                    $options[$key] = $value;
+                }
             }
         }
         
@@ -55,8 +82,180 @@ class VariableParser
             'name' => $name,
             'type' => $type,
             'options' => $options,
+            'styles' => $styles,
             'original' => '{{' . $variableString . '}}',
         ];
+    }
+
+    /**
+     * Check if a key is a style property
+     */
+    protected function isStyleProperty(string $key): bool
+    {
+        return in_array($key, $this->styleProperties);
+    }
+
+    /**
+     * Normalize style value (convert shortcuts to CSS)
+     */
+    protected function normalizeStyleValue(string $property, string $value): string
+    {
+        // Handle boolean shortcuts
+        if ($property === 'bold') {
+            return $value === 'true' || $value === '1' ? 'bold' : 'normal';
+        }
+        
+        if ($property === 'italic') {
+            return $value === 'true' || $value === '1' ? 'italic' : 'normal';
+        }
+        
+        if ($property === 'underline') {
+            return $value === 'true' || $value === '1' ? 'underline' : 'none';
+        }
+        
+        // Handle font-size without unit
+        if ($property === 'font-size' && is_numeric($value)) {
+            return $value . 'pt';
+        }
+        
+        return $value;
+    }
+
+    /**
+     * Convert styles array to CSS string
+     */
+    public function stylesToCss(array $styles): string
+    {
+        if (empty($styles)) {
+            return '';
+        }
+        
+        $css = [];
+        
+        foreach ($styles as $property => $value) {
+            // Map shortcut properties to CSS
+            $cssProperty = match ($property) {
+                'bold' => 'font-weight',
+                'italic' => 'font-style',
+                'underline' => 'text-decoration',
+                default => $property,
+            };
+            
+            $css[] = "{$cssProperty}: {$value}";
+        }
+        
+        return implode('; ', $css);
+    }
+
+    /**
+     * Convert styles to DOCX XML run properties
+     */
+    public function stylesToDocxXml(array $styles): string
+    {
+        if (empty($styles)) {
+            return '';
+        }
+        
+        $props = [];
+        
+        foreach ($styles as $property => $value) {
+            switch ($property) {
+                case 'bold':
+                    if ($value === 'bold') {
+                        $props[] = '<w:b/>';
+                    }
+                    break;
+                    
+                case 'italic':
+                    if ($value === 'italic') {
+                        $props[] = '<w:i/>';
+                    }
+                    break;
+                    
+                case 'underline':
+                    if ($value === 'underline') {
+                        $props[] = '<w:u w:val="single"/>';
+                    }
+                    break;
+                    
+                case 'font-weight':
+                    if ($value === 'bold') {
+                        $props[] = '<w:b/>';
+                    }
+                    break;
+                    
+                case 'font-style':
+                    if ($value === 'italic') {
+                        $props[] = '<w:i/>';
+                    }
+                    break;
+                    
+                case 'text-decoration':
+                    if ($value === 'underline') {
+                        $props[] = '<w:u w:val="single"/>';
+                    } elseif ($value === 'line-through') {
+                        $props[] = '<w:strike/>';
+                    }
+                    break;
+                    
+                case 'font-size':
+                    // Convert pt to half-points (DOCX uses half-points)
+                    $size = (int) preg_replace('/[^0-9]/', '', $value);
+                    $halfPoints = $size * 2;
+                    $props[] = "<w:sz w:val=\"{$halfPoints}\"/>";
+                    $props[] = "<w:szCs w:val=\"{$halfPoints}\"/>";
+                    break;
+                    
+                case 'color':
+                    $color = ltrim($value, '#');
+                    // Handle named colors
+                    $color = $this->namedColorToHex($color);
+                    $props[] = "<w:color w:val=\"{$color}\"/>";
+                    break;
+                    
+                case 'background-color':
+                    $color = ltrim($value, '#');
+                    $color = $this->namedColorToHex($color);
+                    $props[] = "<w:shd w:val=\"clear\" w:fill=\"{$color}\"/>";
+                    break;
+                    
+                case 'font-family':
+                    $props[] = "<w:rFonts w:ascii=\"{$value}\" w:hAnsi=\"{$value}\"/>";
+                    break;
+            }
+        }
+        
+        if (empty($props)) {
+            return '';
+        }
+        
+        return '<w:rPr>' . implode('', $props) . '</w:rPr>';
+    }
+
+    /**
+     * Convert named color to hex
+     */
+    protected function namedColorToHex(string $color): string
+    {
+        $colors = [
+            'red' => 'FF0000',
+            'green' => '00FF00',
+            'blue' => '0000FF',
+            'black' => '000000',
+            'white' => 'FFFFFF',
+            'yellow' => 'FFFF00',
+            'orange' => 'FFA500',
+            'purple' => '800080',
+            'pink' => 'FFC0CB',
+            'gray' => '808080',
+            'grey' => '808080',
+            'brown' => 'A52A2A',
+            'navy' => '000080',
+            'teal' => '008080',
+            'maroon' => '800000',
+        ];
+        
+        return $colors[strtolower($color)] ?? $color;
     }
 
     /**
@@ -154,5 +353,13 @@ class VariableParser
         }
         
         return $dimensions;
+    }
+
+    /**
+     * Check if variable has styles
+     */
+    public function hasStyles(array $variableInfo): bool
+    {
+        return !empty($variableInfo['styles'] ?? []);
     }
 }

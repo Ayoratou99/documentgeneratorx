@@ -14,17 +14,51 @@ use ZipArchive;
 /**
  * Generator that converts DOCX templates to PDF
  * 
- * Supports {{variable:type,options}} syntax
+ * Supports two conversion methods:
+ * 1. LibreOffice (default, recommended) - Direct conversion, preserves formatting
+ * 2. Dompdf (HTML-based fallback) - Use when LibreOffice is not available
+ * 
+ * Supports {{variable:type,options}} syntax with styling
  */
 class DocxToPdfGenerator implements GeneratorInterface
 {
     protected VariableParser $parser;
     protected ImageProcessor $imageProcessor;
+    protected ?string $libreOfficePath = null;
+    protected string $conversionMethod = 'libreoffice';
 
     public function __construct()
     {
         $this->parser = new VariableParser();
         $this->imageProcessor = new ImageProcessor();
+        
+        // Load config if available (Laravel)
+        try {
+            if (function_exists('app') && app()->bound('config')) {
+                $this->conversionMethod = config('documentgenerator.pdf_conversion', 'libreoffice');
+                $this->libreOfficePath = config('documentgenerator.libreoffice_path');
+            }
+        } catch (\Throwable $e) {
+            // Running outside Laravel - use defaults (libreoffice)
+        }
+    }
+
+    /**
+     * Set conversion method ('libreoffice', 'dompdf', or 'auto')
+     */
+    public function setConversionMethod(string $method): self
+    {
+        $this->conversionMethod = $method;
+        return $this;
+    }
+
+    /**
+     * Set LibreOffice executable path
+     */
+    public function setLibreOfficePath(string $path): self
+    {
+        $this->libreOfficePath = $path;
+        return $this;
     }
 
     /**
@@ -36,7 +70,7 @@ class DocxToPdfGenerator implements GeneratorInterface
             // Process the DOCX template with variables
             $processedDocxPath = $this->processDocxTemplate($templatePath, $variables);
             
-            // Convert to PDF
+            // Convert to PDF using configured method
             $this->convertDocxToPdf($processedDocxPath, $outputPath);
             
             // Clean up temporary DOCX
@@ -88,8 +122,8 @@ class DocxToPdfGenerator implements GeneratorInterface
                 if ($variableInfo['type'] === 'image') {
                     continue;
                 }
-                // Replace with type-aware processing
-                $replacement = $this->getReplacementValue($variableInfo, $value);
+                // Replace with type-aware processing and styles
+                $replacement = $this->getStyledReplacementValue($variableInfo, $value);
                 $documentXml = str_replace($variableInfo['original'], $replacement, $documentXml);
             } else {
                 // Simple replacement for variables without type info
@@ -195,6 +229,28 @@ class DocxToPdfGenerator implements GeneratorInterface
     }
 
     /**
+     * Get styled replacement value with DOCX XML formatting
+     */
+    protected function getStyledReplacementValue(array $variableInfo, mixed $value): string
+    {
+        $text = $this->getReplacementValue($variableInfo, $value);
+        
+        // Check if styles are defined
+        $styles = $variableInfo['styles'] ?? [];
+        
+        if (empty($styles)) {
+            return $text;
+        }
+        
+        // Generate styled XML run
+        $styleXml = $this->parser->stylesToDocxXml($styles);
+        
+        // Wrap text in a run with style properties
+        // We need to close the current text run and create a new styled one
+        return '</w:t></w:r><w:r>' . $styleXml . '<w:t>' . $text . '</w:t></w:r><w:r><w:t>';
+    }
+
+    /**
      * Process image variables
      */
     protected function processImages(string $documentXml, array $variables, array $templateVariables, ZipArchive $zip): string
@@ -269,9 +325,94 @@ class DocxToPdfGenerator implements GeneratorInterface
     }
 
     /**
-     * Convert DOCX to PDF
+     * Convert DOCX to PDF using configured method
      */
     protected function convertDocxToPdf(string $docxPath, string $pdfPath): void
+    {
+        $method = $this->conversionMethod;
+        
+        // LibreOffice is the default - verify it's available
+        if ($method === 'libreoffice' && !$this->detectLibreOffice()) {
+            throw new DocumentGeneratorException(
+                "LibreOffice is not installed or not found on this system.\n\n" .
+                "To fix this, you have two options:\n\n" .
+                "1. Install LibreOffice (recommended for best PDF quality):\n" .
+                "   Download from: https://www.libreoffice.org/download/download/\n" .
+                "   Then set the path in your .env file:\n" .
+                "   LIBREOFFICE_PATH=\"C:\\Program Files\\LibreOffice\\program\\soffice.exe\"\n\n" .
+                "2. Use HTML-based conversion (no LibreOffice required):\n" .
+                "   Set in your .env file:\n" .
+                "   DOCUMENT_PDF_CONVERSION=dompdf\n\n" .
+                "Note: The HTML-based conversion may not preserve all formatting from the original document."
+            );
+        }
+        
+        if ($method === 'libreoffice') {
+            $this->convertWithLibreOffice($docxPath, $pdfPath);
+        } else {
+            $this->convertWithDompdf($docxPath, $pdfPath);
+        }
+    }
+
+    /**
+     * Convert DOCX to PDF using LibreOffice (best quality)
+     */
+    protected function convertWithLibreOffice(string $docxPath, string $pdfPath): void
+    {
+        $libreOffice = $this->getLibreOfficePath();
+        
+        if (!$libreOffice) {
+            throw new DocumentGeneratorException(
+                'LibreOffice not found. Install LibreOffice or set the path in config.'
+            );
+        }
+        
+        // Create output directory
+        $outputDir = dirname($pdfPath);
+        if (!is_dir($outputDir)) {
+            mkdir($outputDir, 0755, true);
+        }
+        
+        // Use a temp directory for LibreOffice output
+        $tempDir = sys_get_temp_dir();
+        
+        // Build the command
+        $command = sprintf(
+            '"%s" --headless --convert-to pdf --outdir "%s" "%s"',
+            $libreOffice,
+            $tempDir,
+            $docxPath
+        );
+        
+        // Execute LibreOffice conversion
+        $output = [];
+        $returnCode = 0;
+        exec($command . ' 2>&1', $output, $returnCode);
+        
+        if ($returnCode !== 0) {
+            throw new DocumentGeneratorException(
+                'LibreOffice conversion failed: ' . implode("\n", $output)
+            );
+        }
+        
+        // LibreOffice creates the PDF with same name as input
+        $generatedPdf = $tempDir . DIRECTORY_SEPARATOR . 
+                        pathinfo($docxPath, PATHINFO_FILENAME) . '.pdf';
+        
+        if (!file_exists($generatedPdf)) {
+            throw new DocumentGeneratorException(
+                'LibreOffice did not generate the PDF file'
+            );
+        }
+        
+        // Move to final destination
+        rename($generatedPdf, $pdfPath);
+    }
+
+    /**
+     * Convert DOCX to PDF using Dompdf (HTML conversion)
+     */
+    protected function convertWithDompdf(string $docxPath, string $pdfPath): void
     {
         // Load the DOCX file
         $phpWord = IOFactory::load($docxPath);
@@ -310,28 +451,139 @@ class DocxToPdfGenerator implements GeneratorInterface
 
     /**
      * Enhance HTML for better PDF rendering
+     * Improves layout to better match original Word document
      */
     protected function enhanceHtmlForPdf(string $html): string
     {
         $css = '<style>
-            body {
-                font-family: DejaVu Sans, Arial, sans-serif;
-                font-size: 12pt;
-                line-height: 1.6;
-                margin: 40px;
+            /* Reset and base styles */
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
             }
+            
+            @page {
+                margin: 2.5cm 2cm 2.5cm 2cm;
+            }
+            
+            body {
+                font-family: "DejaVu Sans", "Calibri", "Arial", sans-serif;
+                font-size: 11pt;
+                line-height: 1.15;
+                color: #000000;
+            }
+            
+            /* Paragraphs - match Word default spacing */
+            p {
+                margin: 0 0 8pt 0;
+                text-align: justify;
+                orphans: 2;
+                widows: 2;
+            }
+            
+            /* Headings */
+            h1, h2, h3, h4, h5, h6 {
+                font-weight: bold;
+                margin-top: 12pt;
+                margin-bottom: 6pt;
+                page-break-after: avoid;
+            }
+            
+            h1 { font-size: 16pt; }
+            h2 { font-size: 14pt; }
+            h3 { font-size: 12pt; }
+            h4 { font-size: 11pt; }
+            
+            /* Tables - preserve Word table styling */
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 10pt 0;
+                page-break-inside: avoid;
+            }
+            
+            td, th {
+                border: 1px solid #000000;
+                padding: 5pt 8pt;
+                vertical-align: top;
+                text-align: left;
+            }
+            
+            th {
+                font-weight: bold;
+                background-color: #f0f0f0;
+            }
+            
+            /* Images */
             img {
                 max-width: 100%;
                 height: auto;
                 display: block;
-                margin: 10px auto;
+                margin: 8pt auto;
             }
-            p {
-                margin: 10px 0;
+            
+            /* Lists */
+            ul, ol {
+                margin: 6pt 0 6pt 20pt;
+                padding-left: 20pt;
             }
-            .centered {
-                text-align: center;
+            
+            li {
+                margin-bottom: 3pt;
             }
+            
+            /* Text alignment classes */
+            .text-left { text-align: left; }
+            .text-center { text-align: center; }
+            .text-right { text-align: right; }
+            .text-justify { text-align: justify; }
+            
+            /* Font styles */
+            strong, b { font-weight: bold; }
+            em, i { font-style: italic; }
+            u { text-decoration: underline; }
+            s, strike { text-decoration: line-through; }
+            
+            /* Preserve whitespace in preformatted text */
+            pre {
+                font-family: "DejaVu Sans Mono", "Courier New", monospace;
+                font-size: 10pt;
+                white-space: pre-wrap;
+                background-color: #f5f5f5;
+                padding: 8pt;
+                border: 1px solid #ddd;
+            }
+            
+            /* Page breaks */
+            .page-break {
+                page-break-before: always;
+            }
+            
+            /* Horizontal rule */
+            hr {
+                border: none;
+                border-top: 1px solid #000000;
+                margin: 12pt 0;
+            }
+            
+            /* Links */
+            a {
+                color: #0563C1;
+                text-decoration: underline;
+            }
+            
+            /* Blockquote */
+            blockquote {
+                margin: 10pt 0 10pt 20pt;
+                padding-left: 10pt;
+                border-left: 3pt solid #ccc;
+                font-style: italic;
+            }
+            
+            /* Superscript and subscript */
+            sup { font-size: 8pt; vertical-align: super; }
+            sub { font-size: 8pt; vertical-align: sub; }
         </style>';
         
         if (stripos($html, '</head>') !== false) {
@@ -339,6 +591,40 @@ class DocxToPdfGenerator implements GeneratorInterface
         } else {
             $html = $css . $html;
         }
+        
+        // Fix common PhpWord HTML issues
+        $html = $this->fixPhpWordHtmlIssues($html);
+        
+        return $html;
+    }
+
+    /**
+     * Fix common issues in PhpWord generated HTML
+     */
+    protected function fixPhpWordHtmlIssues(string $html): string
+    {
+        // Remove empty paragraphs that create extra spacing
+        $html = preg_replace('/<p[^>]*>\s*<\/p>/', '', $html);
+        
+        // Fix double spacing issues
+        $html = preg_replace('/(<br\s*\/?>\s*){3,}/', '<br><br>', $html);
+        
+        // Ensure images have proper dimensions if specified
+        $html = preg_replace_callback(
+            '/<img([^>]*)style="([^"]*)"([^>]*)>/i',
+            function ($matches) {
+                $style = $matches[2];
+                // Ensure max-width doesn't break layout
+                if (strpos($style, 'max-width') === false) {
+                    $style .= '; max-width: 100%';
+                }
+                return '<img' . $matches[1] . 'style="' . $style . '"' . $matches[3] . '>';
+            },
+            $html
+        );
+        
+        // Fix table width issues
+        $html = preg_replace('/<table([^>]*)>/', '<table$1 style="width: 100%">', $html);
         
         return $html;
     }
@@ -361,5 +647,103 @@ class DocxToPdfGenerator implements GeneratorInterface
         }
 
         return htmlspecialchars((string) $value, ENT_XML1);
+    }
+
+    /**
+     * Detect if LibreOffice is available on the system
+     */
+    protected function detectLibreOffice(): bool
+    {
+        return $this->getLibreOfficePath() !== null;
+    }
+
+    /**
+     * Get the LibreOffice executable path
+     * 
+     * If a path is explicitly configured (via setLibreOfficePath or config),
+     * it will be validated and used. If the configured path doesn't exist,
+     * null is returned (no fallback to auto-detection).
+     * 
+     * If no path is configured, auto-detection is used.
+     */
+    protected function getLibreOfficePath(): ?string
+    {
+        // If path is explicitly configured, validate and return it (no fallback)
+        if ($this->libreOfficePath) {
+            return file_exists($this->libreOfficePath) ? $this->libreOfficePath : null;
+        }
+        
+        // Auto-detect: check common paths
+        $paths = $this->getCommonLibreOfficePaths();
+        
+        foreach ($paths as $path) {
+            if (file_exists($path)) {
+                return $path;
+            }
+        }
+        
+        // Try to find using 'which' command on Unix or 'where' on Windows
+        $command = PHP_OS_FAMILY === 'Windows' ? 'where soffice 2>nul' : 'which libreoffice 2>/dev/null || which soffice 2>/dev/null';
+        $output = [];
+        exec($command, $output);
+        
+        if (!empty($output[0]) && file_exists(trim($output[0]))) {
+            return trim($output[0]);
+        }
+        
+        return null;
+    }
+
+    /**
+     * Get common LibreOffice installation paths
+     */
+    protected function getCommonLibreOfficePaths(): array
+    {
+        $paths = [];
+        
+        if (PHP_OS_FAMILY === 'Windows') {
+            // Windows paths
+            $paths = [
+                'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+                'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
+                getenv('LOCALAPPDATA') . '\\Programs\\LibreOffice\\program\\soffice.exe',
+            ];
+        } elseif (PHP_OS_FAMILY === 'Darwin') {
+            // macOS paths
+            $paths = [
+                '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+                '/usr/local/bin/soffice',
+            ];
+        } else {
+            // Linux paths
+            $paths = [
+                '/usr/bin/libreoffice',
+                '/usr/bin/soffice',
+                '/usr/local/bin/libreoffice',
+                '/usr/local/bin/soffice',
+                '/snap/bin/libreoffice',
+            ];
+        }
+        
+        return $paths;
+    }
+
+    /**
+     * Check if LibreOffice is available
+     */
+    public function isLibreOfficeAvailable(): bool
+    {
+        return $this->detectLibreOffice();
+    }
+
+    /**
+     * Get the current conversion method being used
+     */
+    public function getConversionMethod(): string
+    {
+        if ($this->conversionMethod === 'auto') {
+            return $this->detectLibreOffice() ? 'libreoffice' : 'dompdf';
+        }
+        return $this->conversionMethod;
     }
 }

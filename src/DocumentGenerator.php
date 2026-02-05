@@ -330,4 +330,266 @@ class DocumentGenerator
         
         return $this;
     }
+
+    /**
+     * Generate multiple documents from the same template with different variables
+     * 
+     * @param array $documentsData Array of document configurations:
+     *   [
+     *     ['variables' => [...], 'output' => 'path/to/file.pdf'],
+     *     ['variables' => [...], 'output' => 'path/to/file2.pdf'],
+     *   ]
+     * @param bool $parallel Whether to attempt parallel generation (requires pcntl extension)
+     * @param callable|null $onProgress Optional callback for progress: function(int $completed, int $total, string $path)
+     * 
+     * @return array Results with paths and any errors:
+     *   [
+     *     ['success' => true, 'path' => '...', 'output' => '...'],
+     *     ['success' => false, 'error' => '...', 'output' => '...'],
+     *   ]
+     */
+    public function generateBatch(array $documentsData, bool $parallel = false, ?callable $onProgress = null): array
+    {
+        if (!$this->templatePath) {
+            throw new DocumentGeneratorException('Template path is not set. Call template() first.');
+        }
+
+        if (empty($documentsData)) {
+            return [];
+        }
+
+        // Use parallel processing if requested and available
+        if ($parallel && $this->canUseParallel()) {
+            return $this->generateBatchParallel($documentsData, $onProgress);
+        }
+
+        // Sequential processing (always available)
+        return $this->generateBatchSequential($documentsData, $onProgress);
+    }
+
+    /**
+     * Generate batch documents sequentially
+     */
+    protected function generateBatchSequential(array $documentsData, ?callable $onProgress = null): array
+    {
+        $results = [];
+        $total = count($documentsData);
+        $completed = 0;
+
+        foreach ($documentsData as $index => $docData) {
+            $variables = $docData['variables'] ?? [];
+            $outputPath = $docData['output'] ?? null;
+
+            try {
+                // Set variables for this document
+                $this->variables = $variables;
+
+                // Generate
+                $path = $this->generate($outputPath);
+
+                $results[] = [
+                    'success' => true,
+                    'path' => $path,
+                    'output' => $outputPath,
+                    'index' => $index,
+                ];
+
+                $completed++;
+                
+                if ($onProgress) {
+                    $onProgress($completed, $total, $path);
+                }
+
+            } catch (\Throwable $e) {
+                $results[] = [
+                    'success' => false,
+                    'error' => $e->getMessage(),
+                    'output' => $outputPath,
+                    'index' => $index,
+                ];
+
+                $completed++;
+                
+                if ($onProgress) {
+                    $onProgress($completed, $total, null);
+                }
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * Generate batch documents in parallel using pcntl_fork
+     */
+    protected function generateBatchParallel(array $documentsData, ?callable $onProgress = null): array
+    {
+        $total = count($documentsData);
+        $maxWorkers = min(4, $total); // Limit concurrent workers
+        $results = [];
+        $tempFiles = [];
+
+        // Create temp file for IPC (inter-process communication)
+        $ipcFile = tempnam(sys_get_temp_dir(), 'docgen_ipc_');
+
+        // Split documents into chunks for workers
+        $chunks = array_chunk($documentsData, (int) ceil($total / $maxWorkers), true);
+        $pids = [];
+
+        foreach ($chunks as $chunkIndex => $chunk) {
+            $pid = pcntl_fork();
+
+            if ($pid === -1) {
+                // Fork failed, fall back to sequential
+                @unlink($ipcFile);
+                return $this->generateBatchSequential($documentsData, $onProgress);
+            } elseif ($pid === 0) {
+                // Child process
+                $childResults = [];
+
+                foreach ($chunk as $index => $docData) {
+                    $variables = $docData['variables'] ?? [];
+                    $outputPath = $docData['output'] ?? null;
+
+                    try {
+                        $this->variables = $variables;
+                        $path = $this->generate($outputPath);
+
+                        $childResults[] = [
+                            'success' => true,
+                            'path' => $path,
+                            'output' => $outputPath,
+                            'index' => $index,
+                        ];
+                    } catch (\Throwable $e) {
+                        $childResults[] = [
+                            'success' => false,
+                            'error' => $e->getMessage(),
+                            'output' => $outputPath,
+                            'index' => $index,
+                        ];
+                    }
+                }
+
+                // Write results to IPC file
+                $resultFile = $ipcFile . '_' . $chunkIndex;
+                file_put_contents($resultFile, serialize($childResults));
+                exit(0);
+            } else {
+                // Parent process
+                $pids[$chunkIndex] = $pid;
+                $tempFiles[] = $ipcFile . '_' . $chunkIndex;
+            }
+        }
+
+        // Wait for all children to complete
+        $completed = 0;
+        foreach ($pids as $chunkIndex => $pid) {
+            pcntl_waitpid($pid, $status);
+
+            // Read results from child
+            $resultFile = $ipcFile . '_' . $chunkIndex;
+            if (file_exists($resultFile)) {
+                $childResults = unserialize(file_get_contents($resultFile));
+                foreach ($childResults as $result) {
+                    $results[] = $result;
+                    $completed++;
+                    
+                    if ($onProgress) {
+                        $onProgress($completed, $total, $result['path'] ?? null);
+                    }
+                }
+                @unlink($resultFile);
+            }
+        }
+
+        // Clean up IPC file
+        @unlink($ipcFile);
+
+        // Sort results by original index
+        usort($results, fn($a, $b) => ($a['index'] ?? 0) <=> ($b['index'] ?? 0));
+
+        return $results;
+    }
+
+    /**
+     * Check if parallel processing is available
+     */
+    protected function canUseParallel(): bool
+    {
+        return function_exists('pcntl_fork') && PHP_OS_FAMILY !== 'Windows';
+    }
+
+    /**
+     * Static method to generate multiple documents from different templates
+     * 
+     * @param array $documents Array of document configurations:
+     *   [
+     *     ['template' => 'path/to/template.docx', 'variables' => [...], 'output' => 'output.pdf'],
+     *     ['template' => 'path/to/other.docx', 'variables' => [...], 'output' => 'output2.pdf'],
+     *   ]
+     * @param callable|null $onProgress Optional progress callback
+     * 
+     * @return array Results array
+     */
+    public static function batchGenerate(array $documents, ?callable $onProgress = null): array
+    {
+        $results = [];
+        $total = count($documents);
+        $completed = 0;
+
+        foreach ($documents as $index => $docConfig) {
+            $template = $docConfig['template'] ?? null;
+            $variables = $docConfig['variables'] ?? [];
+            $outputPath = $docConfig['output'] ?? null;
+
+            if (!$template) {
+                $results[] = [
+                    'success' => false,
+                    'error' => 'Template path is required',
+                    'output' => $outputPath,
+                    'index' => $index,
+                ];
+                $completed++;
+                continue;
+            }
+
+            try {
+                $generator = new self();
+                $path = $generator
+                    ->template($template)
+                    ->variables($variables)
+                    ->generate($outputPath);
+
+                $results[] = [
+                    'success' => true,
+                    'path' => $path,
+                    'output' => $outputPath,
+                    'index' => $index,
+                ];
+
+                $completed++;
+                
+                if ($onProgress) {
+                    $onProgress($completed, $total, $path);
+                }
+
+            } catch (\Throwable $e) {
+                $results[] = [
+                    'success' => false,
+                    'error' => $e->getMessage(),
+                    'output' => $outputPath,
+                    'index' => $index,
+                ];
+
+                $completed++;
+                
+                if ($onProgress) {
+                    $onProgress($completed, $total, null);
+                }
+            }
+        }
+
+        return $results;
+    }
 }

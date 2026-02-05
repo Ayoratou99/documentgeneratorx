@@ -77,10 +77,10 @@ class HtmlToPdfGenerator implements GeneratorInterface
             // Replace based on type
             $replacement = match ($variableInfo['type']) {
                 'image' => $this->createImageHtml($value, $variableInfo['options']),
-                'text', 'string' => $this->parser->formatValue($variableInfo, $value),
-                'number', 'integer', 'int' => $this->parser->formatValue($variableInfo, $value),
-                'date' => $this->parser->formatValue($variableInfo, $value),
-                'boolean', 'bool' => $this->parser->formatValue($variableInfo, $value) ? 'Yes' : 'No',
+                'text', 'string' => $this->createStyledText($variableInfo, $value),
+                'number', 'integer', 'int' => $this->createStyledText($variableInfo, $value),
+                'date' => $this->createStyledText($variableInfo, $value),
+                'boolean', 'bool' => $this->createStyledText($variableInfo, $value ? 'Yes' : 'No'),
                 default => $this->formatValue($value),
             };
             
@@ -88,6 +88,24 @@ class HtmlToPdfGenerator implements GeneratorInterface
         }
         
         return $content;
+    }
+
+    /**
+     * Create styled text with inline CSS
+     */
+    protected function createStyledText(array $variableInfo, mixed $value): string
+    {
+        $text = htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+        $styles = $variableInfo['styles'] ?? [];
+        
+        if (empty($styles)) {
+            return $text;
+        }
+        
+        // Convert styles to CSS
+        $css = $this->parser->stylesToCss($styles);
+        
+        return '<span style="' . $css . '">' . $text . '</span>';
     }
 
     /**
