@@ -84,7 +84,9 @@ class HtmlToPdfGenerator implements GeneratorInterface
                 default => $this->formatValue($value),
             };
             
-            $content = str_replace($variableInfo['original'], $replacement, $content);
+            // Use flexible pattern to match {{nom:text}} and {{ nom : text }} (with spaces)
+            $pattern = $this->parser->getPlaceholderPattern($variableInfo);
+            $content = preg_replace_callback($pattern, fn () => $replacement, $content);
         }
         
         return $content;

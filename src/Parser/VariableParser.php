@@ -88,6 +88,20 @@ class VariableParser
     }
 
     /**
+     * Get a regex pattern to match this placeholder with flexible whitespace.
+     * Handles both {{nom:text}} and {{ nom : text }} formats.
+     */
+    public function getPlaceholderPattern(array $variableInfo): string
+    {
+        $name = preg_quote($variableInfo['name'], '/');
+        $type = preg_quote($variableInfo['type'], '/');
+
+        // Match {{ with optional whitespace, name, :, type, optional options, }}
+        return '/\{\{\s*' . $name . '\s*:\s*' . $type
+            . '(?:\s*,\s*[^}]*)?\s*\}\}/u';
+    }
+
+    /**
      * Check if a key is a style property
      */
     protected function isStyleProperty(string $key): bool

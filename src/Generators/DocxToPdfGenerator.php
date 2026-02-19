@@ -123,8 +123,10 @@ class DocxToPdfGenerator implements GeneratorInterface
                     continue;
                 }
                 // Replace with type-aware processing and styles
+                // Use flexible pattern to match {{nom:text}} and {{ nom : text }} (with spaces)
                 $replacement = $this->getStyledReplacementValue($variableInfo, $value);
-                $documentXml = str_replace($variableInfo['original'], $replacement, $documentXml);
+                $pattern = $this->parser->getPlaceholderPattern($variableInfo);
+                $documentXml = preg_replace_callback($pattern, fn () => $replacement, $documentXml);
             } else {
                 // Simple replacement for variables without type info
                 $documentXml = str_replace('{{' . $key . '}}', $this->formatValue($value), $documentXml);
@@ -262,7 +264,8 @@ class DocxToPdfGenerator implements GeneratorInterface
             
             if (!isset($variables[$key])) {
                 // Remove image placeholder if no value provided
-                $documentXml = str_replace($info['original'], '', $documentXml);
+                $pattern = $this->parser->getPlaceholderPattern($info);
+                $documentXml = preg_replace_callback($pattern, fn () => '', $documentXml);
                 continue;
             }
             
@@ -298,8 +301,9 @@ class DocxToPdfGenerator implements GeneratorInterface
                 // Create the image XML
                 $imageXml = $this->createImageXml($rId, $widthEmu, $heightEmu, $key);
                 
-                // Replace the placeholder with the image XML
-                $documentXml = str_replace($info['original'], $imageXml, $documentXml);
+                // Replace the placeholder with the image XML (flexible pattern for spaces)
+                $pattern = $this->parser->getPlaceholderPattern($info);
+                $documentXml = preg_replace_callback($pattern, fn () => $imageXml, $documentXml);
                 
                 // Clean up temp file
                 if (str_starts_with(basename($processedImage['path']), 'resized_') ||
@@ -309,7 +313,9 @@ class DocxToPdfGenerator implements GeneratorInterface
                 
             } catch (\Exception $e) {
                 // If image processing fails, just remove the placeholder
-                $documentXml = str_replace($info['original'], '[Image Error: ' . $e->getMessage() . ']', $documentXml);
+                $pattern = $this->parser->getPlaceholderPattern($info);
+                $errorMsg = '[Image Error: ' . $e->getMessage() . ']';
+                $documentXml = preg_replace_callback($pattern, fn () => $errorMsg, $documentXml);
             }
         }
         
