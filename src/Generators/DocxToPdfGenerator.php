@@ -128,13 +128,17 @@ class DocxToPdfGenerator implements GeneratorInterface
                 $pattern = $this->parser->getPlaceholderPattern($variableInfo);
                 $documentXml = preg_replace_callback($pattern, fn () => $replacement, $documentXml);
             } else {
-                // Simple replacement for variables without type info
-                $documentXml = str_replace('{{' . $key . '}}', $this->formatValue($value), $documentXml);
+                // Simple replacement for variables without type info (handle spaced variants)
+                $simplePattern = '/\{\{\s*' . preg_quote($key, '/') . '\s*\}\}/';
+                $documentXml = preg_replace($simplePattern, $this->formatValue($value), $documentXml);
             }
         }
         
         // Handle images separately (they need special XML structure)
         $documentXml = $this->processImages($documentXml, $variables, $templateVariables, $zip);
+        
+        // Clean up any remaining unreplaced placeholders (leave blank instead of {{var:..}})
+        $documentXml = preg_replace('/\{\{\s*[^}]+\s*\}\}/', '', $documentXml);
         
         // Save the modified document.xml back to the ZIP
         $zip->deleteName('word/document.xml');
@@ -324,10 +328,55 @@ class DocxToPdfGenerator implements GeneratorInterface
 
     /**
      * Create image XML for DOCX
+     * 
+     * Uses wp:anchor (floating) instead of wp:inline to keep the image
+     * at the placeholder's position without creating a new paragraph.
+     * The image is placed with a -1px offset from the text origin and
+     * rendered at the highest z-index layer (in front of all text).
      */
     protected function createImageXml(string $rId, int $widthEmu, int $heightEmu, string $name): string
     {
-        return '</w:t></w:r></w:p><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="' . $widthEmu . '" cy="' . $heightEmu . '"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="1" name="' . $name . '"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="' . $name . '"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="' . $rId . '" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' . $widthEmu . '" cy="' . $heightEmu . '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p><w:p><w:r><w:t>';
+        $offset = -9525; // -1 pixel in EMUs
+        $zIndex = 251658240; // high value = in front of everything
+
+        return '</w:t></w:r><w:r><w:drawing>'
+            . '<wp:anchor distT="0" distB="0" distL="0" distR="0"'
+            . ' simplePos="0" relativeHeight="' . $zIndex . '"'
+            . ' behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">'
+            . '<wp:simplePos x="0" y="0"/>'
+            . '<wp:positionH relativeFrom="column">'
+            . '<wp:posOffset>' . $offset . '</wp:posOffset>'
+            . '</wp:positionH>'
+            . '<wp:positionV relativeFrom="paragraph">'
+            . '<wp:posOffset>' . $offset . '</wp:posOffset>'
+            . '</wp:positionV>'
+            . '<wp:extent cx="' . $widthEmu . '" cy="' . $heightEmu . '"/>'
+            . '<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+            . '<wp:wrapNone/>'
+            . '<wp:docPr id="1" name="' . $name . '"/>'
+            . '<wp:cNvGraphicFramePr>'
+            . '<a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>'
+            . '</wp:cNvGraphicFramePr>'
+            . '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            . '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            . '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            . '<pic:nvPicPr>'
+            . '<pic:cNvPr id="0" name="' . $name . '"/>'
+            . '<pic:cNvPicPr/>'
+            . '</pic:nvPicPr>'
+            . '<pic:blipFill>'
+            . '<a:blip r:embed="' . $rId . '" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>'
+            . '<a:stretch><a:fillRect/></a:stretch>'
+            . '</pic:blipFill>'
+            . '<pic:spPr>'
+            . '<a:xfrm><a:off x="0" y="0"/><a:ext cx="' . $widthEmu . '" cy="' . $heightEmu . '"/></a:xfrm>'
+            . '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+            . '</pic:spPr>'
+            . '</pic:pic>'
+            . '</a:graphicData>'
+            . '</a:graphic>'
+            . '</wp:anchor>'
+            . '</w:drawing></w:r><w:r><w:t>';
     }
 
     /**

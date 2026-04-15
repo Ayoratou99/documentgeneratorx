@@ -62,8 +62,9 @@ class HtmlToPdfGenerator implements GeneratorInterface
             $variableInfo = $templateVariables[$key] ?? null;
             
             if (!$variableInfo) {
-                // Simple replacement
-                $content = str_replace('{{' . $key . '}}', $this->formatValue($value), $content);
+                // Simple replacement (also handle spaced variants)
+                $pattern = '/\{\{\s*' . preg_quote($key, '/') . '\s*\}\}/';
+                $content = preg_replace($pattern, $this->formatValue($value), $content);
                 continue;
             }
             
@@ -88,6 +89,9 @@ class HtmlToPdfGenerator implements GeneratorInterface
             $pattern = $this->parser->getPlaceholderPattern($variableInfo);
             $content = preg_replace_callback($pattern, fn () => $replacement, $content);
         }
+        
+        // Clean up any remaining unreplaced placeholders (leave blank instead of {{var:..}})
+        $content = preg_replace('/\{\{\s*[^}]+\s*\}\}/', '', $content);
         
         return $content;
     }
