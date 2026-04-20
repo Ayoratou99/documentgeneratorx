@@ -267,10 +267,10 @@ class DocumentGeneratorTest extends TestCase
         @unlink($processedPath);
     }
 
-    // ─── Image XML structure (anchor, not inline) ────────────────────
+    // ─── Image XML structure (inline, keeps paragraph, no z-index issue) ──
 
     /** @test */
-    public function image_xml_uses_anchor_not_inline()
+    public function image_xml_uses_inline_inside_run()
     {
         $generator = new DocxToPdfGenerator();
         $method = new \ReflectionMethod($generator, 'createImageXml');
@@ -278,8 +278,8 @@ class DocumentGeneratorTest extends TestCase
 
         $xml = $method->invoke($generator, 'rId10', 1905000, 952500, 'test_image');
 
-        $this->assertStringContainsString('wp:anchor', $xml);
-        $this->assertStringNotContainsString('wp:inline', $xml);
+        $this->assertStringContainsString('<wp:inline', $xml);
+        $this->assertStringNotContainsString('<wp:anchor', $xml);
     }
 
     /** @test */
@@ -296,7 +296,7 @@ class DocumentGeneratorTest extends TestCase
     }
 
     /** @test */
-    public function image_xml_has_highest_z_index()
+    public function image_xml_carries_the_expected_dimensions()
     {
         $generator = new DocxToPdfGenerator();
         $method = new \ReflectionMethod($generator, 'createImageXml');
@@ -304,31 +304,84 @@ class DocumentGeneratorTest extends TestCase
 
         $xml = $method->invoke($generator, 'rId10', 1905000, 952500, 'test_image');
 
-        $this->assertStringContainsString('relativeHeight="251658240"', $xml);
-        $this->assertStringContainsString('behindDoc="0"', $xml);
+        $this->assertStringContainsString('cx="1905000"', $xml);
+        $this->assertStringContainsString('cy="952500"', $xml);
     }
 
     /** @test */
-    public function image_xml_has_negative_offset()
+    public function image_xml_references_the_given_relationship_id()
     {
         $generator = new DocxToPdfGenerator();
         $method = new \ReflectionMethod($generator, 'createImageXml');
         $method->setAccessible(true);
 
-        $xml = $method->invoke($generator, 'rId10', 1905000, 952500, 'test_image');
+        $xml = $method->invoke($generator, 'rId42', 1905000, 952500, 'photo_profil');
 
-        $this->assertStringContainsString('<wp:posOffset>-9525</wp:posOffset>', $xml);
+        $this->assertStringContainsString('r:embed="rId42"', $xml);
+        $this->assertStringContainsString('name="photo_profil"', $xml);
+    }
+
+    // ─── Fragmented placeholders in real DOCX XML ──────────────────────
+
+    /** @test */
+    public function it_merges_placeholders_whose_opening_braces_are_in_different_runs()
+    {
+        $generator = new DocxToPdfGenerator();
+        $method = new \ReflectionMethod($generator, 'fixFragmentedPlaceholders');
+        $method->setAccessible(true);
+
+        // Mirrors the exact fragmentation we observed in the fiche template:
+        // ':{'  is in one <w:t>, '{' in another, the name and the type
+        // in two more runs, then '}}' at the end.
+        $fragmented =
+            '<w:r><w:t>Pays :{</w:t></w:r>' .
+            '<w:proofErr w:type="gramEnd"/>' .
+            '<w:r><w:t>{</w:t></w:r>' .
+            '<w:proofErr w:type="spellStart"/>' .
+            '<w:r><w:t>pays</w:t></w:r>' .
+            '<w:r><w:t>:text,bold:true</w:t></w:r>' .
+            '<w:proofErr w:type="spellEnd"/>' .
+            '<w:r><w:t xml:space="preserve">}} </w:t></w:r>';
+
+        $fixed = $method->invoke($generator, $fragmented);
+
+        // After merging, a single contiguous placeholder must exist.
+        $this->assertMatchesRegularExpression(
+            '/<w:t[^>]*>[^<]*\{\{pays:text,bold:true\}\}[^<]*<\/w:t>/',
+            $fixed
+        );
     }
 
     /** @test */
-    public function image_xml_uses_wrap_none()
+    public function it_fully_replaces_fragmented_placeholders_end_to_end()
     {
         $generator = new DocxToPdfGenerator();
-        $method = new \ReflectionMethod($generator, 'createImageXml');
+        $method = new \ReflectionMethod($generator, 'processDocxTemplate');
         $method->setAccessible(true);
 
-        $xml = $method->invoke($generator, 'rId10', 1905000, 952500, 'test_image');
+        // Build a DOCX whose placeholder is split by a style change mid-word.
+        $phpWord = new \PhpOffice\PhpWord\PhpWord();
+        $section = $phpWord->addSection();
+        $para = $section->addTextRun();
+        $para->addText('Hello {');
+        $para->addText('{name', ['bold' => true]);
+        $para->addText(':text}}!');
 
-        $this->assertStringContainsString('<wp:wrapNone/>', $xml);
+        $templatePath = tempnam(sys_get_temp_dir(), 'tpl_') . '.docx';
+        \PhpOffice\PhpWord\IOFactory::createWriter($phpWord, 'Word2007')->save($templatePath);
+
+        $processedPath = $method->invoke($generator, $templatePath, ['name' => 'Alice']);
+
+        $zip = new \ZipArchive();
+        $zip->open($processedPath);
+        $xml = $zip->getFromName('word/document.xml');
+        $zip->close();
+
+        $this->assertStringContainsString('Alice', $xml);
+        $this->assertStringNotContainsString('{{name', $xml);
+        $this->assertStringNotContainsString('{{', $xml);
+
+        @unlink($templatePath);
+        @unlink($processedPath);
     }
 }

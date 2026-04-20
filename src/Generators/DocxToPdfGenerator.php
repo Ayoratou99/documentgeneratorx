@@ -149,70 +149,142 @@ class DocxToPdfGenerator implements GeneratorInterface
     }
 
     /**
-     * Fix fragmented placeholders in Word XML
-     * Word sometimes splits {{variable:type}} across multiple <w:t> tags
+     * Fix fragmented placeholders in Word XML.
+     *
+     * Word frequently splits a single "{{variable:type,options}}" across
+     * several <w:r>/<w:t> runs (spell-check, language, rPr changes,
+     * proofErr hints, etc.). In extreme cases the two opening "{" chars are
+     * stored in two different runs, so a regex anchored on literal "{{"
+     * can never see them as adjacent.
+     *
+     * Strategy:
+     *   1. Collect every <w:t>...</w:t> text node together with its XML
+     *      offset and its range inside a virtual concatenated text.
+     *   2. Run the placeholder regex on the concatenated text.
+     *   3. For each placeholder that spans more than one <w:t>, rewrite the
+     *      XML so the complete placeholder lives inside the first <w:t>
+     *      (preserving surrounding text in the first/last nodes and emptying
+     *      the intermediate ones).
+     *
+     * This produces clean "{{name:type,opts}}" strings that the rest of the
+     * pipeline can replace with a single preg_replace call.
      */
     protected function fixFragmentedPlaceholders(string $xml): string
     {
-        // Extract all text content, find placeholders, then rebuild
-        // This handles cases where {{ and }} are split across tags
-        
-        $maxIterations = 20;
-        $iteration = 0;
-        
-        // Keep merging until no more fragmented placeholders
-        while ($iteration < $maxIterations) {
-            $changed = false;
-            
-            // Pattern: {{ followed by any XML tags, then more text, until }}
-            // This handles: {{</w:t>...</w:t>name:</w:t>...</w:t>text</w:t>...</w:t>}}
-            $xml = preg_replace_callback(
-                '/\{\{((?:[^}]|(?:<[^>]+>))*?)\}\}/s',
-                function ($matches) use (&$changed) {
-                    $content = $matches[1];
-                    // Remove all XML tags from inside the placeholder
-                    $cleanContent = preg_replace('/<[^>]+>/', '', $content);
-                    $changed = ($content !== $cleanContent);
-                    return '{{' . $cleanContent . '}}';
-                },
-                $xml
-            );
-            
-            // Also find incomplete {{ that needs merging with next w:t
-            // Pattern: text with {{ but no }}, followed by </w:t>, then eventually }}
-            $pattern = '/(<w:t[^>]*>)([^<]*\{\{[^}<]*)(<\/w:t>.*?<w:t[^>]*>)([^<]*\}\})/s';
-            $newXml = preg_replace_callback(
-                $pattern,
-                function ($matches) use (&$changed) {
-                    $changed = true;
-                    // Extract the placeholder parts and merge them
-                    $beforeTag = $matches[1];
-                    $part1 = $matches[2]; // Contains {{
-                    $middleTags = $matches[3];
-                    $part2 = $matches[4]; // Contains }}
-                    
-                    // Extract text from middle tags
-                    preg_match_all('/<w:t[^>]*>([^<]*)<\/w:t>/', $middleTags, $textMatches);
-                    $middleText = implode('', $textMatches[1] ?? []);
-                    
-                    return $beforeTag . $part1 . $middleText . $part2 . '</w:t>';
-                },
-                $xml
-            );
-            
-            if ($newXml !== null && $newXml !== $xml) {
-                $xml = $newXml;
-                $changed = true;
-            }
-            
-            if (!$changed) {
-                break;
-            }
-            
-            $iteration++;
+        if (!preg_match_all('/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/', $xml, $tMatches, PREG_OFFSET_CAPTURE)) {
+            return $xml;
         }
-        
+
+        // Build a virtual text stream: concatenation of every <w:t> inner text,
+        // with a mapping back to the original XML match (offset + length).
+        $segments = [];
+        $concatenated = '';
+        foreach ($tMatches[0] as $idx => $fullMatch) {
+            $innerText = $tMatches[1][$idx][0];
+            $segStart  = strlen($concatenated);
+            $concatenated .= $innerText;
+            $segments[] = [
+                'xmlOffset' => $fullMatch[1],
+                'xmlLength' => strlen($fullMatch[0]),
+                'fullMatch' => $fullMatch[0],
+                'text'      => $innerText,
+                'vStart'    => $segStart,
+                'vEnd'      => $segStart + strlen($innerText),
+            ];
+        }
+
+        if (!preg_match_all('/\{\{[^{}]+\}\}/', $concatenated, $phMatches, PREG_OFFSET_CAPTURE)) {
+            return $xml;
+        }
+
+        // Collect edits first, then apply them from the end of the XML to the
+        // beginning so the offsets stay valid.
+        $edits = [];
+
+        foreach ($phMatches[0] as $ph) {
+            $placeholder = $ph[0];
+            $phStart     = $ph[1];
+            $phEnd       = $phStart + strlen($placeholder);
+
+            $firstIdx = null;
+            $lastIdx  = null;
+            foreach ($segments as $i => $seg) {
+                if ($seg['vEnd'] > $phStart && $seg['vStart'] < $phEnd) {
+                    $firstIdx = $firstIdx ?? $i;
+                    $lastIdx  = $i;
+                }
+            }
+
+            // Not found, or already contained in a single <w:t>: nothing to merge.
+            if ($firstIdx === null || $firstIdx === $lastIdx) {
+                continue;
+            }
+
+            $firstSeg = $segments[$firstIdx];
+            $lastSeg  = $segments[$lastIdx];
+
+            $beforeInFirst = substr($firstSeg['text'], 0, $phStart - $firstSeg['vStart']);
+            $afterInLast   = substr($lastSeg['text'], $phEnd  - $lastSeg['vStart']);
+
+            // Rewrite the first <w:t>: "<before><placeholder>".
+            $newFirstContent = $beforeInFirst . $placeholder;
+            $edits[] = [
+                'offset'      => $firstSeg['xmlOffset'],
+                'length'      => $firstSeg['xmlLength'],
+                'replacement' => $this->rewriteTextNode($firstSeg['fullMatch'], $newFirstContent),
+            ];
+
+            // Empty every intermediate <w:t>.
+            for ($i = $firstIdx + 1; $i < $lastIdx; $i++) {
+                $mid = $segments[$i];
+                $edits[] = [
+                    'offset'      => $mid['xmlOffset'],
+                    'length'      => $mid['xmlLength'],
+                    'replacement' => $this->rewriteTextNode($mid['fullMatch'], ''),
+                ];
+            }
+
+            // Rewrite the last <w:t> with anything that appeared after "}}".
+            $edits[] = [
+                'offset'      => $lastSeg['xmlOffset'],
+                'length'      => $lastSeg['xmlLength'],
+                'replacement' => $this->rewriteTextNode($lastSeg['fullMatch'], $afterInLast),
+            ];
+        }
+
+        if (empty($edits)) {
+            return $xml;
+        }
+
+        usort($edits, fn ($a, $b) => $b['offset'] <=> $a['offset']);
+        foreach ($edits as $edit) {
+            $xml = substr_replace($xml, $edit['replacement'], $edit['offset'], $edit['length']);
+        }
+
         return $xml;
+    }
+
+    /**
+     * Return a copy of a <w:t>…</w:t> node with replaced inner content.
+     *
+     * If the new content contains leading/trailing whitespace, xml:space="preserve"
+     * is added so Word/LibreOffice keep the spacing exactly as the original.
+     */
+    protected function rewriteTextNode(string $fullNode, string $newContent): string
+    {
+        $escaped = htmlspecialchars($newContent, ENT_XML1, 'UTF-8');
+
+        $needsPreserve = $newContent !== '' && preg_match('/^\s|\s$/u', $newContent);
+        if ($needsPreserve && strpos($fullNode, 'xml:space="preserve"') === false) {
+            $fullNode = preg_replace('/<w:t(\s[^>]*)?>/', '<w:t xml:space="preserve"$1>', $fullNode, 1);
+        }
+
+        return preg_replace_callback(
+            '/<w:t([^>]*)>[^<]*<\/w:t>/',
+            fn ($m) => '<w:t' . $m[1] . '>' . $escaped . '</w:t>',
+            $fullNode,
+            1
+        );
     }
 
     /**
@@ -327,32 +399,27 @@ class DocxToPdfGenerator implements GeneratorInterface
     }
 
     /**
-     * Create image XML for DOCX
-     * 
-     * Uses wp:anchor (floating) instead of wp:inline to keep the image
-     * at the placeholder's position without creating a new paragraph.
-     * The image is placed with a -1px offset from the text origin and
-     * rendered at the highest z-index layer (in front of all text).
+     * Create image XML for DOCX.
+     *
+     * Uses wp:inline so the image takes the exact place of the placeholder:
+     *   - inside a text-box/shape (wps:txbxContent), the image fills that
+     *     shape and inherits its position (no nested anchor issues);
+     *   - inside a regular paragraph, it sits in-line with the surrounding
+     *     text instead of starting a new paragraph.
+     *
+     * Inline drawings participate in the text flow so there is no z-index
+     * problem – the image is always rendered on top of its paragraph
+     * background and cannot end up "behind" other content.
      */
     protected function createImageXml(string $rId, int $widthEmu, int $heightEmu, string $name): string
     {
-        $offset = -9525; // -1 pixel in EMUs
-        $zIndex = 251658240; // high value = in front of everything
-
+        // Close the current run/text and open a fresh run for the drawing,
+        // then reopen an empty text run so any subsequent content still has
+        // a valid <w:t> to live in. No </w:p><w:p> – the paragraph stays.
         return '</w:t></w:r><w:r><w:drawing>'
-            . '<wp:anchor distT="0" distB="0" distL="0" distR="0"'
-            . ' simplePos="0" relativeHeight="' . $zIndex . '"'
-            . ' behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">'
-            . '<wp:simplePos x="0" y="0"/>'
-            . '<wp:positionH relativeFrom="column">'
-            . '<wp:posOffset>' . $offset . '</wp:posOffset>'
-            . '</wp:positionH>'
-            . '<wp:positionV relativeFrom="paragraph">'
-            . '<wp:posOffset>' . $offset . '</wp:posOffset>'
-            . '</wp:positionV>'
+            . '<wp:inline distT="0" distB="0" distL="0" distR="0">'
             . '<wp:extent cx="' . $widthEmu . '" cy="' . $heightEmu . '"/>'
             . '<wp:effectExtent l="0" t="0" r="0" b="0"/>'
-            . '<wp:wrapNone/>'
             . '<wp:docPr id="1" name="' . $name . '"/>'
             . '<wp:cNvGraphicFramePr>'
             . '<a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>'
@@ -375,7 +442,7 @@ class DocxToPdfGenerator implements GeneratorInterface
             . '</pic:pic>'
             . '</a:graphicData>'
             . '</a:graphic>'
-            . '</wp:anchor>'
+            . '</wp:inline>'
             . '</w:drawing></w:r><w:r><w:t>';
     }
 
