@@ -155,19 +155,24 @@ class DocxToPdfGenerator implements GeneratorInterface
      * several <w:r>/<w:t> runs (spell-check, language, rPr changes,
      * proofErr hints, etc.). In extreme cases the two opening "{" chars are
      * stored in two different runs, so a regex anchored on literal "{{"
-     * can never see them as adjacent.
+     * can never see them as adjacent. It is also common to see TIGHT
+     * packing where a single <w:t> closes one placeholder and opens the
+     * next (e.g. "<w:t>}} {{</w:t>"), so two placeholders partially share
+     * the same run.
      *
-     * Strategy:
-     *   1. Collect every <w:t>...</w:t> text node together with its XML
-     *      offset and its range inside a virtual concatenated text.
-     *   2. Run the placeholder regex on the concatenated text.
-     *   3. For each placeholder that spans more than one <w:t>, rewrite the
-     *      XML so the complete placeholder lives inside the first <w:t>
-     *      (preserving surrounding text in the first/last nodes and emptying
-     *      the intermediate ones).
-     *
-     * This produces clean "{{name:type,opts}}" strings that the rest of the
-     * pipeline can replace with a single preg_replace call.
+     * Strategy (positional rewrite of every <w:t>, placeholder-aware):
+     *   1. Collect every <w:t>...</w:t> inner text with its XML offset and
+     *      its [vStart, vEnd) range inside a virtual concatenated stream.
+     *   2. Run "{{...}}" on the concatenated stream to locate every
+     *      complete placeholder as a half-open range [start, end).
+     *   3. For each segment, walk its virtual range character by character:
+     *        - if the position is the START of a placeholder, emit the
+     *          full placeholder text and jump to its end (this seg owns it);
+     *        - if the position is inside a placeholder but past its start,
+     *          skip it (content is owned by an earlier seg);
+     *        - otherwise emit the original byte.
+     *      This correctly handles adjacent placeholders that share a seg
+     *      and produces exactly one "{{name:type,opts}}" copy per match.
      */
     protected function fixFragmentedPlaceholders(string $xml): string
     {
@@ -175,14 +180,12 @@ class DocxToPdfGenerator implements GeneratorInterface
             return $xml;
         }
 
-        // Build a virtual text stream: concatenation of every <w:t> inner text,
-        // with a mapping back to the original XML match (offset + length).
         $segments = [];
-        $concatenated = '';
+        $concat   = '';
         foreach ($tMatches[0] as $idx => $fullMatch) {
             $innerText = $tMatches[1][$idx][0];
-            $segStart  = strlen($concatenated);
-            $concatenated .= $innerText;
+            $segStart  = strlen($concat);
+            $concat   .= $innerText;
             $segments[] = [
                 'xmlOffset' => $fullMatch[1],
                 'xmlLength' => strlen($fullMatch[0]),
@@ -193,63 +196,70 @@ class DocxToPdfGenerator implements GeneratorInterface
             ];
         }
 
-        if (!preg_match_all('/\{\{[^{}]+\}\}/', $concatenated, $phMatches, PREG_OFFSET_CAPTURE)) {
+        if (!preg_match_all('/\{\{[^{}]+\}\}/', $concat, $phMatches, PREG_OFFSET_CAPTURE)) {
             return $xml;
         }
 
-        // Collect edits first, then apply them from the end of the XML to the
-        // beginning so the offsets stay valid.
-        $edits = [];
-
+        // Sorted list of placeholders, indexed by start position for fast lookup.
+        $placeholders = [];
+        $phByStart    = [];
         foreach ($phMatches[0] as $ph) {
-            $placeholder = $ph[0];
-            $phStart     = $ph[1];
-            $phEnd       = $phStart + strlen($placeholder);
+            $start = $ph[1];
+            $end   = $start + strlen($ph[0]);
+            $placeholders[]     = ['text' => $ph[0], 'start' => $start, 'end' => $end];
+            $phByStart[$start]  = count($placeholders) - 1;
+        }
 
-            $firstIdx = null;
-            $lastIdx  = null;
-            foreach ($segments as $i => $seg) {
-                if ($seg['vEnd'] > $phStart && $seg['vStart'] < $phEnd) {
-                    $firstIdx = $firstIdx ?? $i;
-                    $lastIdx  = $i;
+        // Return the index of the placeholder that contains position $p (starts
+        // at or before $p and ends after $p) or null if $p is outside any.
+        $findEnclosing = function (int $p) use ($placeholders): ?int {
+            foreach ($placeholders as $idx => $ph) {
+                if ($ph['start'] > $p) {
+                    return null;
+                }
+                if ($ph['end'] > $p) {
+                    return $idx;
                 }
             }
+            return null;
+        };
 
-            // Not found, or already contained in a single <w:t>: nothing to merge.
-            if ($firstIdx === null || $firstIdx === $lastIdx) {
-                continue;
+        $edits = [];
+
+        foreach ($segments as $seg) {
+            $new = '';
+            $i   = $seg['vStart'];
+            $e   = $seg['vEnd'];
+
+            while ($i < $e) {
+                if (isset($phByStart[$i])) {
+                    // A placeholder starts exactly at $i: this segment owns it.
+                    $ph   = $placeholders[$phByStart[$i]];
+                    $new .= $ph['text'];
+                    $i    = min($e, $ph['end']);
+                    continue;
+                }
+
+                $enclosingIdx = $findEnclosing($i);
+                if ($enclosingIdx !== null) {
+                    // We're inside a placeholder started in an earlier segment:
+                    // skip the portion of it that overlaps this segment.
+                    $i = min($e, $placeholders[$enclosingIdx]['end']);
+                    continue;
+                }
+
+                // Plain content: copy the original byte verbatim.
+                $new .= $concat[$i];
+                $i++;
             }
 
-            $firstSeg = $segments[$firstIdx];
-            $lastSeg  = $segments[$lastIdx];
-
-            $beforeInFirst = substr($firstSeg['text'], 0, $phStart - $firstSeg['vStart']);
-            $afterInLast   = substr($lastSeg['text'], $phEnd  - $lastSeg['vStart']);
-
-            // Rewrite the first <w:t>: "<before><placeholder>".
-            $newFirstContent = $beforeInFirst . $placeholder;
-            $edits[] = [
-                'offset'      => $firstSeg['xmlOffset'],
-                'length'      => $firstSeg['xmlLength'],
-                'replacement' => $this->rewriteTextNode($firstSeg['fullMatch'], $newFirstContent),
-            ];
-
-            // Empty every intermediate <w:t>.
-            for ($i = $firstIdx + 1; $i < $lastIdx; $i++) {
-                $mid = $segments[$i];
+            if ($new !== $seg['text']) {
                 $edits[] = [
-                    'offset'      => $mid['xmlOffset'],
-                    'length'      => $mid['xmlLength'],
-                    'replacement' => $this->rewriteTextNode($mid['fullMatch'], ''),
+                    'offset'      => $seg['xmlOffset'],
+                    'length'      => $seg['xmlLength'],
+                    'replacement' => $this->rewriteTextNode($seg['fullMatch'], $new),
                 ];
             }
-
-            // Rewrite the last <w:t> with anything that appeared after "}}".
-            $edits[] = [
-                'offset'      => $lastSeg['xmlOffset'],
-                'length'      => $lastSeg['xmlLength'],
-                'replacement' => $this->rewriteTextNode($lastSeg['fullMatch'], $afterInLast),
-            ];
         }
 
         if (empty($edits)) {

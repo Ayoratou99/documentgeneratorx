@@ -384,4 +384,41 @@ class DocumentGeneratorTest extends TestCase
         @unlink($templatePath);
         @unlink($processedPath);
     }
+
+    /** @test */
+    public function it_handles_two_placeholders_that_share_a_single_w_t_run()
+    {
+        // Real-world pattern observed in FICHE_IDENTIFICATION_VEHICULE_TEMPLATE:
+        // one <w:t> holds the closing "}}" of placeholder A and the opening
+        // "{{" of placeholder B (e.g. "<w:t>}} {{</w:t>"). Both placeholders
+        // therefore touch that same segment. Previously this produced
+        // corrupted XML (duplicated braces / swallowed placeholders); the new
+        // per-segment rewrite has to emit exactly one complete placeholder
+        // for A and one for B.
+        $generator = new DocxToPdfGenerator();
+        $method = new \ReflectionMethod($generator, 'fixFragmentedPlaceholders');
+        $method->setAccessible(true);
+
+        $fragmented =
+            '<w:r><w:t xml:space="preserve">Naiss : {</w:t></w:r>' .
+            '<w:r><w:t>{date_naiss</w:t></w:r>' .
+            '<w:r><w:t>:text</w:t></w:r>' .
+            '<w:r><w:t>}} à {</w:t></w:r>' .   // share: closes A, opens B
+            '<w:r><w:t>{lieu</w:t></w:r>' .
+            '<w:r><w:t>:text}}</w:t></w:r>';
+
+        $fixed = $method->invoke($generator, $fragmented);
+
+        $this->assertMatchesRegularExpression(
+            '/<w:t[^>]*>[^<]*\{\{date_naiss:text\}\}[^<]*<\/w:t>/',
+            $fixed
+        );
+        $this->assertMatchesRegularExpression(
+            '/<w:t[^>]*>[^<]*\{\{lieu:text\}\}[^<]*<\/w:t>/',
+            $fixed
+        );
+
+        $this->assertSame(2, substr_count($fixed, '{{'));
+        $this->assertSame(2, substr_count($fixed, '}}'));
+    }
 }
