@@ -35,15 +35,37 @@ class VariableParser
     public function parse(string $template): array
     {
         $variables = [];
-        
-        // Match pattern: {{varname:type,option1:value1,option2:value2}}
-        preg_match_all('/\{\{([^}]+)\}\}/', $template, $matches);
-        
-        foreach ($matches[1] as $match) {
-            $parsed = $this->parseVariable($match);
+
+        // Match placeholders with surrounding DOCX run context.
+        preg_match_all(
+            '/<w:r\b[^>]*>(.*?)<w:t[^>]*>[^<]*(\{\{([^{}]+)\}\})[^<]*<\/w:t>.*?<\/w:r>/s',
+            $template,
+            $contextMatches,
+            PREG_SET_ORDER
+        );
+
+        foreach ($contextMatches as $match) {
+            $runXml = $match[1];
+            $inner = $match[3];
+            $parsed = $this->parseVariable($inner);
+
+            if (preg_match('/<w:sz\s+w:val="(\d+)"/', $runXml, $szMatch)) {
+                $parsed['surrounding_sz'] = (int) $szMatch[1];
+            }
+
             $variables[$parsed['name']] = $parsed;
         }
-        
+
+        // Match pattern: {{varname:type,option1:value1,option2:value2}}
+        preg_match_all('/\{\{([^{}]+)\}\}/', $template, $matches);
+
+        foreach ($matches[1] as $match) {
+            $parsed = $this->parseVariable($match);
+            if (!isset($variables[$parsed['name']])) {
+                $variables[$parsed['name']] = $parsed;
+            }
+        }
+
         return $variables;
     }
 
@@ -95,12 +117,11 @@ class VariableParser
     {
         $name = preg_quote($variableInfo['name'], '/');
         $type = preg_quote($variableInfo['type'], '/');
-
-        // Match {{ with optional whitespace, name, :, type, optional options, }}
+    
         return '/\{\{\s*' . $name . '\s*:\s*' . $type
-            . '(?:\s*,\s*[^}]*)?\s*\}\}/u';
+            . '(?:\s*,\s*[^{}]*)?\s*\}\}/u';
+    //                     ^^^^^^ was [^}]*
     }
-
     /**
      * Check if a key is a style property
      */

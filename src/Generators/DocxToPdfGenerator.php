@@ -322,20 +322,39 @@ class DocxToPdfGenerator implements GeneratorInterface
     protected function getStyledReplacementValue(array $variableInfo, mixed $value): string
     {
         $text = $this->getReplacementValue($variableInfo, $value);
-        
-        // Check if styles are defined
         $styles = $variableInfo['styles'] ?? [];
-        
+
         if (empty($styles)) {
             return $text;
         }
-        
-        // Generate styled XML run
+
         $styleXml = $this->parser->stylesToDocxXml($styles);
-        
-        // Wrap text in a run with style properties
-        // We need to close the current text run and create a new styled one
-        return '</w:t></w:r><w:r>' . $styleXml . '<w:t>' . $text . '</w:t></w:r><w:r><w:t>';
+
+        // Extract custom font size if set (in pt)
+        $customSizePt = isset($styles['font-size']) ? (int) $styles['font-size'] : null;
+
+        // Extract surrounding run font size from parser context (in half-points)
+        $surroundingSzHalfPt = $variableInfo['surrounding_sz'] ?? null;
+
+        if ($customSizePt !== null && $surroundingSzHalfPt !== null) {
+            $customSzHalfPt = $customSizePt * 2;
+            if ($customSzHalfPt > $surroundingSzHalfPt) {
+                $offset = -round(($customSzHalfPt - $surroundingSzHalfPt) / 2);
+                $positionXml = '<w:position w:val="' . $offset . '"/>';
+                $styleXml = str_replace('</w:rPr>', $positionXml . '</w:rPr>', $styleXml);
+            }
+        } elseif ($customSizePt !== null) {
+            // Fallback to Word default body text size (12pt = 24 half-points)
+            $surroundingFallback = 24;
+            $customSzHalfPt = $customSizePt * 2;
+            if ($customSzHalfPt > $surroundingFallback) {
+                $offset = -round(($customSzHalfPt - $surroundingFallback) / 2);
+                $positionXml = '<w:position w:val="' . $offset . '"/>';
+                $styleXml = str_replace('</w:rPr>', $positionXml . '</w:rPr>', $styleXml);
+            }
+        }
+
+        return '</w:t></w:r><w:r>' . $styleXml . '<w:t xml:space="preserve">' . $text . '</w:t></w:r><w:r><w:t xml:space="preserve">';
     }
 
     /**
