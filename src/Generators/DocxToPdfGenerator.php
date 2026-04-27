@@ -323,37 +323,16 @@ class DocxToPdfGenerator implements GeneratorInterface
     {
         $text = $this->getReplacementValue($variableInfo, $value);
         $styles = $variableInfo['styles'] ?? [];
-
+    
         if (empty($styles)) {
             return $text;
         }
-
+    
         $styleXml = $this->parser->stylesToDocxXml($styles);
-
-        // Extract custom font size if set (in pt)
-        $customSizePt = isset($styles['font-size']) ? (int) $styles['font-size'] : null;
-
-        // Extract surrounding run font size from parser context (in half-points)
-        $surroundingSzHalfPt = $variableInfo['surrounding_sz'] ?? null;
-
-        if ($customSizePt !== null && $surroundingSzHalfPt !== null) {
-            $customSzHalfPt = $customSizePt * 2;
-            if ($customSzHalfPt > $surroundingSzHalfPt) {
-                $offset = -round(($customSzHalfPt - $surroundingSzHalfPt) / 2);
-                $positionXml = '<w:position w:val="' . $offset . '"/>';
-                $styleXml = str_replace('</w:rPr>', $positionXml . '</w:rPr>', $styleXml);
-            }
-        } elseif ($customSizePt !== null) {
-            // Fallback to Word default body text size (12pt = 24 half-points)
-            $surroundingFallback = 24;
-            $customSzHalfPt = $customSizePt * 2;
-            if ($customSzHalfPt > $surroundingFallback) {
-                $offset = -round(($customSzHalfPt - $surroundingFallback) / 2);
-                $positionXml = '<w:position w:val="' . $offset . '"/>';
-                $styleXml = str_replace('</w:rPr>', $positionXml . '</w:rPr>', $styleXml);
-            }
-        }
-
+    
+        // No <w:position> needed. Word naturally baseline-aligns all runs
+        // in a paragraph. Larger text grows upward from the shared baseline,
+        // which is exactly the correct visual result.
         return '</w:t></w:r><w:r>' . $styleXml . '<w:t xml:space="preserve">' . $text . '</w:t></w:r><w:r><w:t xml:space="preserve">';
     }
 
