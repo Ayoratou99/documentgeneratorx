@@ -12,6 +12,7 @@ A Laravel package to generate **PDF documents** from DOCX or HTML templates with
 - **HTML Templates**: Use HTML files as templates
 - **Variable Styling**: Apply colors, bold, italic, and more to variables
 - **Image Support**: Insert images with custom dimensions
+- **Array / Repeating Rows**: Fill a table column from a list — rows are added automatically
 - **Batch Generation**: Generate multiple documents at once
 - **Queue Support**: Process documents in background with Laravel queues
 - **Event System**: Hook into generation lifecycle with Laravel events
@@ -49,6 +50,7 @@ $pdfPath = DocumentGenerator::template('template.docx')
 
 - [Variable Syntax](#variable-syntax)
 - [Styling Variables](#styling-variables)
+- [Arrays & Repeating Table Rows](#arrays--repeating-table-rows)
 - [Single Document Generation](#single-document-generation)
 - [Batch Generation](#batch-generation)
 - [Queue & Events (Parallel Processing)](#queue--events-parallel-processing)
@@ -75,6 +77,9 @@ Use double curly braces with type annotations in your template:
 | Image | `{{photo:image,width:200,height:100}}` | `'path/to/image.jpg'` |
 | Date | `{{date:date}}` | `'2024-01-15'` |
 | Boolean | `{{active:boolean}}` | `true` |
+| Array | `{{items:array}}` | `['Hammer', 'Saw', 'Nail']` |
+
+> **Array** placeholders fill a table column from a list and grow the table automatically. See [Arrays & Repeating Table Rows](#arrays--repeating-table-rows).
 
 ### Image Options
 
@@ -112,6 +117,86 @@ Apply styling directly in template placeholders:
 ### Named Colors
 
 `red`, `green`, `blue`, `black`, `white`, `yellow`, `orange`, `purple`, `pink`, `gray`, `brown`, `navy`, `teal`, `maroon`
+
+---
+
+## Arrays & Repeating Table Rows
+
+> _Available since **v2.0.7**._
+
+Use the `array` type to render a **list of values down a column**. The value you
+pass is a plain array of strings (numbers, booleans and dates work too — they are
+stringified). One value is placed per row, and **the table grows by itself** to
+fit the data.
+
+```
+{{items:array}}
+```
+
+```php
+['items' => ['Hammer', 'Saw', 'Nail']]
+```
+
+### How it works
+
+Put the placeholder in **one row** of a table. That row becomes the template:
+
+- It is cloned once per value in the list.
+- If you drew extra blank rows under it, they are filled first; when the list is
+  longer, **new rows are added automatically**. When the list is shorter, the
+  leftover blank rows are removed — so the output is always exactly the right size.
+- If the list is empty, the template row is removed (only the header remains).
+
+### Multiple columns side by side
+
+Place an array placeholder in each column of the **same** row. The row is cloned to
+the length of the **longest** list; shorter columns simply leave blank cells.
+
+**DOCX template (a 4-column table):**
+
+| Numero | Nom | Q | Dimission |
+|--------|-----|---|-----------|
+| `{{nums:array}}` | `{{noms:array}}` | `{{qs:array}}` | `{{dims:array}}` |
+
+**PHP code:**
+
+```php
+DocumentGenerator::template('inventory.docx')
+    ->variables([
+        'nums' => ['1', '2', '3'],
+        'noms' => ['Hammer', 'Saw', 'Nail'],
+        'qs'   => ['10', '5', '200'],
+        'dims' => ['20cm', '40cm', '3cm'],
+    ])
+    ->generate('inventory.pdf');
+```
+
+**Result — the single placeholder row becomes three filled rows:**
+
+| Numero | Nom | Q | Dimission |
+|--------|-----|---|-----------|
+| 1 | Hammer | 10 | 20cm |
+| 2 | Saw | 5 | 40cm |
+| 3 | Nail | 200 | 3cm |
+
+### Styling array values
+
+Array placeholders accept the same style options as text:
+
+```
+{{noms:array,bold:true,color:#2c3e50}}
+```
+
+### Arrays outside a table
+
+If an `array` placeholder is **not** inside a table, the values are stacked on
+separate lines within the same paragraph (joined with line breaks).
+
+### Notes
+
+- Values are XML-escaped automatically (`&`, `<`, `>` are safe).
+- A non-array value (e.g. a single string) is treated as a one-element list.
+- Arrays inside a **nested** table (a table within a table cell) are not expanded.
 
 ---
 

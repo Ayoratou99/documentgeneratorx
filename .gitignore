@@ -24,3 +24,8 @@ Thumbs.db
 
 # Temporary Word files
 ~$*.docx
+
+# Array demo output (regenerate: php examples/array_table_demo.php)
+/examples/array_demo_template.docx
+/examples/array_demo_result.docx
+/examples/array_demo_result.pdf

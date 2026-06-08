@@ -468,6 +468,53 @@ DocumentGenerator::template('invoice.docx')
 
 ---
 
+### Array
+
+_Since **v2.0.7**._
+
+**Syntax:** `{{variable:array}}`
+
+**With Styles:** `{{variable:array,bold:true,color:red}}`
+
+Renders a list of values **vertically** — one value per row in the same column.
+Designed for table columns: the row holding the placeholder is cloned once per
+value, and the table grows (or shrinks) to fit the data.
+
+**Valid Values:**
+- Array of strings (numbers, booleans, and `DateTimeInterface` are stringified)
+- A single scalar is treated as a one-element list
+- An empty array removes the template row
+
+**Behavior:**
+
+| Layout | Result |
+|--------|--------|
+| Placeholder in a table row | Row is cloned once per value; blank rows below are filled first, then rows are auto-added |
+| Several arrays in one row | Row cloned to the **longest** list; shorter columns leave blank cells |
+| Placeholder outside a table | Values stacked on separate lines (joined with line breaks) |
+| Nested table (table-in-cell) | Not expanded |
+
+**Example:**
+
+Template (a table whose single data row contains the placeholders):
+
+```
+| {{nums:array}} | {{noms:array}} | {{qs:array}} |
+```
+
+```php
+DocumentGenerator::template('inventory.docx')
+    ->variables([
+        'nums' => ['1', '2', '3'],
+        'noms' => ['Hammer', 'Saw', 'Nail'],
+        'qs'   => [10, 5, 200],
+    ])
+    ->generate('inventory.pdf');
+// -> three filled rows; values are XML-escaped automatically
+```
+
+---
+
 ## Configuration
 
 ### Config File: `config/documentgenerator.php`
@@ -592,7 +639,7 @@ DocumentGenerator::template('template.docx')
 
 | Package Version | Laravel Version | PHP Version |
 |----------------|-----------------|-------------|
-| 1.x | 10.x, 11.x | 8.1+ |
+| 2.x | 9.x, 10.x, 11.x, 12.x | 8.1+ |
 
 ---
 

@@ -5,6 +5,7 @@ namespace Ayoratoumvone\Documentgeneratorx\Generators;
 use Ayoratoumvone\Documentgeneratorx\Contracts\GeneratorInterface;
 use Ayoratoumvone\Documentgeneratorx\Exceptions\DocumentGeneratorException;
 use Ayoratoumvone\Documentgeneratorx\Parser\VariableParser;
+use Ayoratoumvone\Documentgeneratorx\Processors\ArrayProcessor;
 use Ayoratoumvone\Documentgeneratorx\Processors\ImageProcessor;
 use PhpOffice\PhpWord\IOFactory;
 use Dompdf\Dompdf;
@@ -24,6 +25,7 @@ class DocxToPdfGenerator implements GeneratorInterface
 {
     protected VariableParser $parser;
     protected ImageProcessor $imageProcessor;
+    protected ArrayProcessor $arrayProcessor;
     protected ?string $libreOfficePath = null;
     protected string $conversionMethod = 'libreoffice';
 
@@ -31,6 +33,7 @@ class DocxToPdfGenerator implements GeneratorInterface
     {
         $this->parser = new VariableParser();
         $this->imageProcessor = new ImageProcessor();
+        $this->arrayProcessor = new ArrayProcessor($this->parser);
         
         // Load config if available (Laravel)
         try {
@@ -112,11 +115,22 @@ class DocxToPdfGenerator implements GeneratorInterface
         
         // Parse variables from the document
         $templateVariables = $this->parser->parse($documentXml);
-        
+
+        // Expand array variables first: this clones table rows (and joins
+        // inline lists) so every cloned row can still receive scalar/image
+        // replacements below.
+        $documentXml = $this->arrayProcessor->process($documentXml, $templateVariables, $variables);
+
         // Process each variable
         foreach ($variables as $key => $value) {
             $variableInfo = $templateVariables[$key] ?? null;
-            
+
+            // Arrays were already expanded above, and a raw array can never be
+            // a scalar replacement (htmlspecialchars would fail), so skip them.
+            if (($variableInfo['type'] ?? null) === 'array' || is_array($value)) {
+                continue;
+            }
+
             if ($variableInfo) {
                 // Skip images (handled separately)
                 if ($variableInfo['type'] === 'image') {

@@ -304,6 +304,7 @@ class VariableParser
             'image' => $this->isValidImage($value),
             'date' => $value instanceof \DateTimeInterface || is_string($value),
             'boolean', 'bool' => is_bool($value),
+            'array', 'list' => is_array($value),
             default => true,
         };
     }
@@ -342,6 +343,7 @@ class VariableParser
             'date' => $this->formatDate($value),
             'text', 'string' => (string) $value,
             'image' => $value, // Keep as is for image processing
+            'array', 'list' => array_values((array) $value), // Expanded by ArrayProcessor
             default => $value,
         };
     }
