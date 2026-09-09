@@ -515,6 +515,56 @@ DocumentGenerator::template('inventory.docx')
 
 ---
 
+## Conditional Blocks
+
+_Since **v2.0.8**._
+
+Keep or drop a block of the document based on a variable.
+
+**Syntax:**
+```
+{{if:CONDITION}} … {{elseif:CONDITION}} … {{else}} … {{endif}}
+```
+
+**Conditions:**
+
+| Form | Meaning |
+|------|---------|
+| `{{if:flag}}` | truthy: `flag` is non-empty / `true` / non-zero / non-empty array |
+| `{{if:age=A}}` or `{{if:age==A}}` | equals (case-sensitive, literal right-hand side) |
+| `{{if:age!=A}}` | not equal |
+
+**Rules:**
+- Only the first matching branch is kept; `{{else}}` is the fallback. Markers are always removed.
+- The right-hand side is a literal string and may be quoted: `{{if:name="John Doe"}}`.
+- Values are stringified before comparison (`true`/`false`, numbers, `Y-m-d` for dates).
+- **Block layout:** each marker alone in its paragraph → whole paragraphs/tables between markers are kept or dropped, with no blank lines left behind.
+- **Inline layout:** markers within a single line of text → only the text between them is kept or dropped.
+- Conditionals can be nested. Variable placeholders inside a kept branch are replaced normally.
+- Not supported: a conditional that spans whole table **rows** (markers in separate `<w:tr>` rows).
+
+**Example:**
+
+Template:
+```
+{{if:membership=gold}}
+Gold member: {{name:text}}
+{{elseif:membership=silver}}
+Silver member: {{name:text}}
+{{else}}
+Standard member
+{{endif}}
+```
+
+```php
+DocumentGenerator::template('card.docx')
+    ->variables(['membership' => 'gold', 'name' => 'Alice'])
+    ->generate('card.pdf');
+// -> keeps only the "Gold member: Alice" block
+```
+
+---
+
 ## Configuration
 
 ### Config File: `config/documentgenerator.php`

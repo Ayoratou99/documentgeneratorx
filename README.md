@@ -51,6 +51,7 @@ $pdfPath = DocumentGenerator::template('template.docx')
 - [Variable Syntax](#variable-syntax)
 - [Styling Variables](#styling-variables)
 - [Arrays & Repeating Table Rows](#arrays--repeating-table-rows)
+- [Conditional Blocks](#conditional-blocks)
 - [Single Document Generation](#single-document-generation)
 - [Batch Generation](#batch-generation)
 - [Queue & Events (Parallel Processing)](#queue--events-parallel-processing)
@@ -78,8 +79,11 @@ Use double curly braces with type annotations in your template:
 | Date | `{{date:date}}` | `'2024-01-15'` |
 | Boolean | `{{active:boolean}}` | `true` |
 | Array | `{{items:array}}` | `['Hammer', 'Saw', 'Nail']` |
+| Condition | `{{if:age=A}} … {{endif}}` | `age => 'A'` shows the block |
 
 > **Array** placeholders fill a table column from a list and grow the table automatically. See [Arrays & Repeating Table Rows](#arrays--repeating-table-rows).
+>
+> **Condition** blocks show or hide content based on a variable. See [Conditional Blocks](#conditional-blocks).
 
 ### Image Options
 
@@ -197,6 +201,58 @@ separate lines within the same paragraph (joined with line breaks).
 - Values are XML-escaped automatically (`&`, `<`, `>` are safe).
 - A non-array value (e.g. a single string) is treated as a one-element list.
 - Arrays inside a **nested** table (a table within a table cell) are not expanded.
+
+---
+
+## Conditional Blocks
+
+> _Available since **v2.0.8**._
+
+Show or hide part of the document based on a variable. Wrap the content between
+`{{if:…}}` and `{{endif}}`; only the branch whose condition matches is kept — the
+markers themselves are always removed.
+
+```
+{{if:age=A}}
+This paragraph appears only when age equals "A".
+{{elseif:age=B}}
+Shown when age equals "B".
+{{else}}
+Shown when nothing above matched.
+{{endif}}
+```
+
+```php
+DocumentGenerator::template('report.docx')
+    ->variables(['age' => 'A'])
+    ->generate('report.pdf');
+```
+
+### Conditions
+
+| Form | Meaning |
+|------|---------|
+| `{{if:flag}}` | truthy — kept when `flag` is non-empty, `true`, non-zero, or a non-empty array |
+| `{{if:age=A}}` | equals (`=` and `==` are the same) |
+| `{{if:age!=A}}` | not equal |
+
+- The right-hand side is a **literal** string; it may be quoted (`{{if:name="John Doe"}}`).
+- Comparison is **case-sensitive** (`A` ≠ `a`).
+- A missing variable is treated as empty, so `{{if:missing}}` is false.
+
+### Layouts
+
+- **Block** — put each marker on its own line/paragraph. Whole paragraphs (and
+  tables) between the markers are kept or removed, and the marker lines leave no
+  blank space behind.
+- **Inline** — keep everything on one line: `Status: {{if:vip}}Gold{{else}}Standard{{endif}}`.
+
+Conditionals may be **nested**, and variable placeholders inside a kept block
+(e.g. `{{name:text}}`) are filled normally.
+
+> Note: a conditional that wraps whole table **rows** (markers sitting in
+> separate rows) is not supported — keep `{{if}}`…`{{endif}}` within a cell, a
+> paragraph, or across body paragraphs.
 
 ---
 

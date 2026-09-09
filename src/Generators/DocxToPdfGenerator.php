@@ -6,6 +6,7 @@ use Ayoratoumvone\Documentgeneratorx\Contracts\GeneratorInterface;
 use Ayoratoumvone\Documentgeneratorx\Exceptions\DocumentGeneratorException;
 use Ayoratoumvone\Documentgeneratorx\Parser\VariableParser;
 use Ayoratoumvone\Documentgeneratorx\Processors\ArrayProcessor;
+use Ayoratoumvone\Documentgeneratorx\Processors\ConditionalProcessor;
 use Ayoratoumvone\Documentgeneratorx\Processors\ImageProcessor;
 use PhpOffice\PhpWord\IOFactory;
 use Dompdf\Dompdf;
@@ -26,6 +27,7 @@ class DocxToPdfGenerator implements GeneratorInterface
     protected VariableParser $parser;
     protected ImageProcessor $imageProcessor;
     protected ArrayProcessor $arrayProcessor;
+    protected ConditionalProcessor $conditionalProcessor;
     protected ?string $libreOfficePath = null;
     protected string $conversionMethod = 'libreoffice';
 
@@ -34,6 +36,7 @@ class DocxToPdfGenerator implements GeneratorInterface
         $this->parser = new VariableParser();
         $this->imageProcessor = new ImageProcessor();
         $this->arrayProcessor = new ArrayProcessor($this->parser);
+        $this->conditionalProcessor = new ConditionalProcessor();
         
         // Load config if available (Laravel)
         try {
@@ -112,7 +115,11 @@ class DocxToPdfGenerator implements GeneratorInterface
         
         // Fix fragmented XML: Word sometimes splits {{variable}} across multiple XML tags
         $documentXml = $this->fixFragmentedPlaceholders($documentXml);
-        
+
+        // Resolve conditional blocks ({{if:…}} … {{endif}}) before anything else
+        // consumes placeholders, so hidden branches are dropped and never filled.
+        $documentXml = $this->conditionalProcessor->process($documentXml, $variables);
+
         // Parse variables from the document
         $templateVariables = $this->parser->parse($documentXml);
 

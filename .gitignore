@@ -29,3 +29,9 @@ Thumbs.db
 /examples/array_demo_template.docx
 /examples/array_demo_result.docx
 /examples/array_demo_result.pdf
+
+# Conditional demo output (regenerate: php examples/conditional_demo.php)
+/examples/conditional_demo_template.docx
+/examples/conditional_demo_gold.pdf
+/examples/conditional_demo_silver.pdf
+/examples/conditional_demo_bronze.pdf
