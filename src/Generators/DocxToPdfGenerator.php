@@ -524,40 +524,88 @@ class DocxToPdfGenerator implements GeneratorInterface
             mkdir($outputDir, 0755, true);
         }
         
-        // Use a temp directory for LibreOffice output
-        $tempDir = sys_get_temp_dir();
-        
-        // Build the command
-        $command = sprintf(
-            '"%s" --headless --convert-to pdf --outdir "%s" "%s"',
-            $libreOffice,
-            $tempDir,
-            $docxPath
+        // Isolated working dir per conversion: LibreOffice needs a writable
+        // user profile and refuses to run two instances on the same one.
+        // Without this, conversions fail silently (empty output, non-zero exit)
+        // when HOME is not writable (e.g. www-data in Docker) or when several
+        // requests/queue workers convert concurrently.
+        $workDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'docgen_lo_' . bin2hex(random_bytes(8));
+        $profileDir = $workDir . DIRECTORY_SEPARATOR . 'profile';
+        $outDir = $workDir . DIRECTORY_SEPARATOR . 'out';
+        mkdir($profileDir, 0700, true);
+        mkdir($outDir, 0700, true);
+
+        try {
+            $profileUri = 'file://' . (PHP_OS_FAMILY === 'Windows' ? '/' : '')
+                . str_replace('\\', '/', $profileDir);
+
+            $command = sprintf(
+                '%s -env:UserInstallation=%s --headless --norestore --nolockcheck --convert-to pdf --outdir %s %s',
+                escapeshellarg($libreOffice),
+                escapeshellarg($profileUri),
+                escapeshellarg($outDir),
+                escapeshellarg($docxPath)
+            );
+
+            if (PHP_OS_FAMILY !== 'Windows') {
+                // Ensure HOME points to a writable location
+                $command = 'HOME=' . escapeshellarg($workDir) . ' ' . $command;
+            }
+
+            // Exit code 81 = profile was just initialised and soffice asks for a restart
+            for ($attempt = 1; $attempt <= 2; $attempt++) {
+                $output = [];
+                $returnCode = 0;
+                exec($command . ' 2>&1', $output, $returnCode);
+
+                if ($returnCode !== 81) {
+                    break;
+                }
+            }
+
+            $generatedPdf = $outDir . DIRECTORY_SEPARATOR .
+                            pathinfo($docxPath, PATHINFO_FILENAME) . '.pdf';
+
+            if ($returnCode !== 0 || !file_exists($generatedPdf)) {
+                throw new DocumentGeneratorException(sprintf(
+                    'LibreOffice conversion failed (exit code %d, user %s, command: %s): %s',
+                    $returnCode,
+                    function_exists('posix_geteuid') ? ((posix_getpwuid(posix_geteuid()) ?: [])['name'] ?? (string) posix_geteuid()) : get_current_user(),
+                    $command,
+                    $output ? implode("\n", $output) : '(no output)'
+                ));
+            }
+
+            // Move to final destination (copy+unlink works across filesystems/volumes)
+            if (!@rename($generatedPdf, $pdfPath)) {
+                if (!copy($generatedPdf, $pdfPath)) {
+                    throw new DocumentGeneratorException("Failed to write PDF to {$pdfPath}");
+                }
+            }
+        } finally {
+            $this->removeDirectory($workDir);
+        }
+    }
+
+    /**
+     * Recursively remove a directory
+     */
+    protected function removeDirectory(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+
+        $items = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
         );
-        
-        // Execute LibreOffice conversion
-        $output = [];
-        $returnCode = 0;
-        exec($command . ' 2>&1', $output, $returnCode);
-        
-        if ($returnCode !== 0) {
-            throw new DocumentGeneratorException(
-                'LibreOffice conversion failed: ' . implode("\n", $output)
-            );
+
+        foreach ($items as $item) {
+            $item->isDir() ? @rmdir($item->getPathname()) : @unlink($item->getPathname());
         }
-        
-        // LibreOffice creates the PDF with same name as input
-        $generatedPdf = $tempDir . DIRECTORY_SEPARATOR . 
-                        pathinfo($docxPath, PATHINFO_FILENAME) . '.pdf';
-        
-        if (!file_exists($generatedPdf)) {
-            throw new DocumentGeneratorException(
-                'LibreOffice did not generate the PDF file'
-            );
-        }
-        
-        // Move to final destination
-        rename($generatedPdf, $pdfPath);
+
+        @rmdir($dir);
     }
 
     /**

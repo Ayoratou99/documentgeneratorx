@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.9] - 2026-09-30
+
+### Fixed
+- **LibreOffice conversion failing silently in some Docker environments**
+  ("LibreOffice conversion failed: " with no output). Each conversion now runs
+  with its own isolated user profile (`-env:UserInstallation`), a writable
+  `HOME` and a unique output directory, so it no longer breaks when the PHP
+  user's home is not writable or when several requests/queue workers convert
+  concurrently. Exit code 81 (profile initialisation) is retried once.
+- Command arguments are now shell-escaped; the PDF move falls back to copy
+  when crossing filesystems/volumes.
+
+### Changed
+- LibreOffice error messages now include the exit code, the system user and
+  the executed command to make production failures diagnosable.
+
 ## [2.0.8] - 2026-09-09
 
 ### Added
