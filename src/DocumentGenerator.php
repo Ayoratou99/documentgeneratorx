@@ -114,7 +114,7 @@ class DocumentGenerator
     /**
      * Generate the PDF document and return file path
      */
-    public function generate(string $outputPath = null): string
+    public function generate(?string $outputPath = null): string
     {
         if (!$this->templatePath) {
             throw new DocumentGeneratorException('Template path is not set');
@@ -185,7 +185,7 @@ class DocumentGenerator
     /**
      * Generate and return as download response
      */
-    public function download(string $filename = null): \Symfony\Component\HttpFoundation\BinaryFileResponse
+    public function download(?string $filename = null): \Symfony\Component\HttpFoundation\BinaryFileResponse
     {
         $filePath = $this->generate();
         

@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.10] - 2026-10-22
+
+### Changed
+- `dompdf/dompdf` constraint widened to `^2.0|^3.0`, so the package installs
+  alongside `barryvdh/laravel-dompdf` 3.x (Laravel 12). No API change.
+
+### Fixed
+- Explicit nullable types on `DocumentGenerator::generate()` and
+  `DocumentGenerator::download()` (implicitly nullable parameters are
+  deprecated since PHP 8.4).
+- The Composer dist archive no longer ships `composer.phar`, `composer.lock`,
+  tests and examples (`.gitattributes` export-ignore).
+
 ## [2.0.9] - 2026-09-30
 
 ### Fixed

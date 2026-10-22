@@ -1,0 +1,8 @@
+# Files left out of the Composer dist archive (tests, examples, tooling).
+/tests export-ignore
+/examples export-ignore
+/composer.phar export-ignore
+/composer.lock export-ignore
+/phpunit.xml export-ignore
+/.gitignore export-ignore
+/.gitattributes export-ignore
