@@ -16,7 +16,13 @@ class ImageProcessor
     }
 
     /**
-     * Process image (from URL or file) and return processed file path
+     * Process image (from URL or file) and return the processed file path
+     * with its DISPLAY size, in pixels.
+     *
+     * The display size always keeps the image's own proportions: a single
+     * requested dimension gives the other one, two dimensions define a box the
+     * image fits in. Returning the requested dimensions instead would stretch
+     * the picture whenever they do not share its aspect ratio.
      */
     public function process(string $source, array $dimensions = []): array
     {
@@ -25,12 +31,75 @@ class ImageProcessor
         if (!empty($dimensions)) {
             $imagePath = $this->resizeImage($imagePath, $dimensions);
         }
+
+        $info = @getimagesize($imagePath);
+        $display = $this->displaySize($dimensions, (int) ($info[0] ?? 0), (int) ($info[1] ?? 0));
         
         return [
             'path' => $imagePath,
-            'width' => $dimensions['width'] ?? null,
-            'height' => $dimensions['height'] ?? null,
+            'width' => $display['width'],
+            'height' => $display['height'],
         ];
+    }
+
+    /**
+     * Display size of an image of $imageWidth × $imageHeight pixels for the
+     * requested dimensions, without ever distorting it:
+     *   - width only  → height derived from the image's aspect ratio;
+     *   - height only → width derived from the image's aspect ratio;
+     *   - both, or a ratio → the image fits inside that box;
+     *   - none        → the image's own size.
+     *
+     * @return array{width: int, height: int}
+     */
+    public function displaySize(array $dimensions, int $imageWidth, int $imageHeight): array
+    {
+        $width = $dimensions['width'] ?? null;
+        $height = $dimensions['height'] ?? null;
+
+        if ($imageWidth <= 0 || $imageHeight <= 0) {
+            // Unreadable image: nothing to preserve, keep the requested box.
+            return ['width' => $width ?: 200, 'height' => $height ?: 100];
+        }
+
+        if (isset($dimensions['ratio'])) {
+            [$width, $height] = $this->ratioBox($dimensions, $imageWidth, $imageHeight);
+        }
+
+        $scale = match (true) {
+            $width && $height => min($width / $imageWidth, $height / $imageHeight),
+            (bool) $width => $width / $imageWidth,
+            (bool) $height => $height / $imageHeight,
+            default => 1.0,
+        };
+
+        return [
+            'width' => max(1, (int) round($imageWidth * $scale)),
+            'height' => max(1, (int) round($imageHeight * $scale)),
+        ];
+    }
+
+    /**
+     * Box derived from a `ratio:W:H` option and an optional width or height.
+     *
+     * @return array{0: int, 1: int}
+     */
+    protected function ratioBox(array $dimensions, int $imageWidth, int $imageHeight): array
+    {
+        $ratio = $dimensions['ratio'];
+        $targetRatio = $ratio['width'] / $ratio['height'];
+
+        if ($imageWidth / $imageHeight > $targetRatio) {
+            // Image is wider, fit to height
+            $newHeight = $dimensions['height'] ?? 400;
+            $newWidth = (int) ($newHeight * $targetRatio);
+        } else {
+            // Image is taller, fit to width
+            $newWidth = $dimensions['width'] ?? 600;
+            $newHeight = (int) ($newWidth / $targetRatio);
+        }
+
+        return [$newWidth, $newHeight];
     }
 
     /**
@@ -181,23 +250,7 @@ class ImageProcessor
             
             // Handle ratio-based resizing
             if (isset($dimensions['ratio'])) {
-                $ratio = $dimensions['ratio'];
-                $currentWidth = $image->width();
-                $currentHeight = $image->height();
-                
-                // Calculate dimensions maintaining aspect ratio
-                $targetRatio = $ratio['width'] / $ratio['height'];
-                $currentRatio = $currentWidth / $currentHeight;
-                
-                if ($currentRatio > $targetRatio) {
-                    // Image is wider, fit to height
-                    $newHeight = $dimensions['height'] ?? 400;
-                    $newWidth = (int) ($newHeight * $targetRatio);
-                } else {
-                    // Image is taller, fit to width
-                    $newWidth = $dimensions['width'] ?? 600;
-                    $newHeight = (int) ($newWidth / $targetRatio);
-                }
+                [$newWidth, $newHeight] = $this->ratioBox($dimensions, $image->width(), $image->height());
                 
                 $image->scale($newWidth, $newHeight);
             } else {

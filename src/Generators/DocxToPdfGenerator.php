@@ -8,6 +8,7 @@ use Ayoratoumvone\Documentgeneratorx\Parser\VariableParser;
 use Ayoratoumvone\Documentgeneratorx\Processors\ArrayProcessor;
 use Ayoratoumvone\Documentgeneratorx\Processors\ConditionalProcessor;
 use Ayoratoumvone\Documentgeneratorx\Processors\ImageProcessor;
+use Ayoratoumvone\Documentgeneratorx\Support\WordText;
 use PhpOffice\PhpWord\IOFactory;
 use Dompdf\Dompdf;
 use Dompdf\Options;
@@ -329,11 +330,11 @@ class DocxToPdfGenerator implements GeneratorInterface
         }
         
         return match ($variableInfo['type']) {
-            'text', 'string' => htmlspecialchars((string) $value, ENT_XML1),
+            'text', 'string' => WordText::escape((string) $value),
             'number', 'integer', 'int' => (string) (int) $value,
             'date' => $value instanceof \DateTimeInterface ? $value->format('Y-m-d') : (string) $value,
             'boolean', 'bool' => $value ? 'Yes' : 'No',
-            default => htmlspecialchars((string) $value, ENT_XML1),
+            default => WordText::escape((string) $value),
         };
     }
 
@@ -845,7 +846,7 @@ class DocxToPdfGenerator implements GeneratorInterface
             return $value->format('Y-m-d H:i:s');
         }
 
-        return htmlspecialchars((string) $value, ENT_XML1);
+        return WordText::escape((string) $value);
     }
 
     /**

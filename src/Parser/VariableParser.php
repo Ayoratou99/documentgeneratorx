@@ -117,10 +117,16 @@ class VariableParser
     {
         $name = preg_quote($variableInfo['name'], '/');
         $type = preg_quote($variableInfo['type'], '/');
-    
-        return '/\{\{\s*' . $name . '\s*:\s*' . $type
-            . '(?:\s*,\s*[^{}]*)?\s*\}\}/u';
-    //                     ^^^^^^ was [^}]*
+        $typed = '\s*:\s*' . $type . '(?:\s*,\s*[^{}]*)?';
+
+        // A placeholder written without a type ({{name}}) is parsed as
+        // `text`: it must match too, or it is never replaced and the final
+        // clean-up silently erases it.
+        if ($variableInfo['type'] === 'text') {
+            $typed = '(?:' . $typed . ')?';
+        }
+
+        return '/\{\{\s*' . $name . $typed . '\s*\}\}/u';
     }
     /**
      * Check if a key is a style property

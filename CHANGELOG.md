@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.11] - 2026-11-19
+
+### Fixed
+- Images no longer get stretched. The displayed size now keeps the image's
+  own proportions: `width` alone derives the height, `height` alone derives
+  the width, both define a box the image fits in. Previously the requested
+  dimensions were used as is, and a missing one defaulted to 200×100 px, so
+  `{{photo:image,width:200}}` squeezed any portrait photo into 200×100.
+- Line breaks in text values are kept: `\n` (and `\r\n`, `\r`) becomes a
+  Word line break (`<w:br/>`) and `\t` a tab (`<w:tab/>`), for scalar, untyped
+  and array values, styled or not. Word collapses raw line feeds inside a
+  text node, so multi-line values used to render on a single line.
+- Untyped placeholders (`{{name}}`) are replaced again. They were parsed as
+  `text` but only matched as `{{name:text}}`, so the final clean-up silently
+  erased them.
+
 ## [2.0.10] - 2026-10-22
 
 ### Changed

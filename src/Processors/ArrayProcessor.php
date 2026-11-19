@@ -3,6 +3,7 @@
 namespace Ayoratoumvone\Documentgeneratorx\Processors;
 
 use Ayoratoumvone\Documentgeneratorx\Parser\VariableParser;
+use Ayoratoumvone\Documentgeneratorx\Support\WordText;
 
 /**
  * Expands `{{name:array}}` placeholders.
@@ -171,7 +172,7 @@ class ArrayProcessor
             $pattern = $this->parser->getPlaceholderPattern($info);
 
             $parts = array_map(
-                fn ($value) => htmlspecialchars($this->stringify($value), ENT_XML1, 'UTF-8'),
+                fn ($value) => WordText::escape($this->stringify($value)),
                 $lists[$name]
             );
             $joined = implode('</w:t><w:br/><w:t xml:space="preserve">', $parts);
@@ -213,7 +214,7 @@ class ArrayProcessor
      */
     protected function renderValue(array $info, mixed $value): string
     {
-        $text   = htmlspecialchars($this->stringify($value), ENT_XML1, 'UTF-8');
+        $text   = WordText::escape($this->stringify($value));
         $styles = $info['styles'] ?? [];
 
         if (empty($styles)) {
